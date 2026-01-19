@@ -91,7 +91,6 @@ const styles = StyleSheet.create({
     title: {
         fontFamily: 'InstrumentSerif_400Regular',
         fontSize: 18,
-        fontWeight: '700',
         color: '#FFFFFF',
         marginBottom: 2,
     },

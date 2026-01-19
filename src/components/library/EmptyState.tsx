@@ -51,7 +51,6 @@ const styles = StyleSheet.create({
     heading: {
         fontFamily: 'InstrumentSerif_400Regular',
         fontSize: 24,
-        fontWeight: '700',
         color: '#FFFFFF',
         textAlign: 'center',
         marginBottom: 16,

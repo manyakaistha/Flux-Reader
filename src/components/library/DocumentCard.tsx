@@ -79,7 +79,6 @@ const styles = StyleSheet.create({
     title: {
         fontFamily: 'InstrumentSerif_400Regular',
         fontSize: 16,
-        fontWeight: '700',
         color: '#FFFFFF',
         lineHeight: 20,
         marginBottom: 4,
