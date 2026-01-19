@@ -1,22 +1,36 @@
+/**
+ * Reader Screen
+ * PDF Reader with vertical scroll, auto-hiding chrome, and RSVP integration
+ */
+
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Dimensions,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View,
+    useColorScheme,
+    View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
+import {
+    PageIndicator,
+    ReaderFooter,
+    ReaderTopBar,
+    ReadingOptionsSheet,
+} from '@/src/components/reader';
 import { RSVPOverlay } from '@/src/components/rsvp/RSVPOverlay';
-import { updateLastReadPage } from '@/src/database/db';
+import { animations, getTheme, ReaderTheme } from '@/src/constants/readerTheme';
+import { updateLastOpenedAt, updateLastReadPage } from '@/src/database/db';
+import { useRSVPStore } from '@/src/store/rsvpStore';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const _Dimensions = Dimensions.get('window');
 
 export default function ReaderScreen() {
     const params = useLocalSearchParams<{
@@ -27,16 +41,39 @@ export default function ReaderScreen() {
     }>();
 
     const router = useRouter();
+    const systemColorScheme = useColorScheme();
 
+    // Document state
     const [currentPage, setCurrentPage] = useState(parseInt(params.lastReadPage || '1', 10));
     const [totalPages, setTotalPages] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
-    const [showRSVP, setShowRSVP] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // RSVP state
+    const [showRSVP, setShowRSVP] = useState(false);
+    const rsvpStore = useRSVPStore();
+
+    // Chrome visibility state
+    const [chromeVisible, setChromeVisible] = useState(true);
+    const chromeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Scroll indicator
+    const [isScrolling, setIsScrolling] = useState(false);
+    const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Reading options
+    const [showOptionsSheet, setShowOptionsSheet] = useState(false);
+    const [readerTheme, setReaderTheme] = useState<ReaderTheme>('dark');
+    const [brightness, setBrightness] = useState(100);
+
+    // Scroll position save
+    const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const docId = parseInt(params.id || '0', 10);
     const pdfUri = params.uri || '';
     const docName = params.name || 'Document';
+
+    const themeColors = getTheme(readerTheme, systemColorScheme === 'dark');
 
     /**
      * PDF viewer HTML with pdf.js - Vertical Scroll Mode
@@ -49,7 +86,7 @@ export default function ReaderScreen() {
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; }
                 body { 
-                    background: #1a1a1a;
+                    background: ${themeColors.background};
                     overflow-y: auto;
                     -webkit-overflow-scrolling: touch;
                 }
@@ -57,14 +94,26 @@ export default function ReaderScreen() {
                     display: flex;
                     flex-direction: column;
                     align-items: center;
-                    padding: 20px 10px;
-                    gap: 20px;
+                    padding: 72px 16px 60px 16px;
+                    gap: 16px;
                 }
                 .page-wrapper {
                     background: #fff;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
                     border-radius: 4px;
                     overflow: hidden;
+                    position: relative;
+                }
+                .page-number {
+                    position: absolute;
+                    bottom: 8px;
+                    right: 8px;
+                    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+                    font-size: 11px;
+                    color: rgba(0,0,0,0.4);
+                    background: rgba(255,255,255,0.8);
+                    padding: 2px 6px;
+                    border-radius: 4px;
                 }
                 canvas {
                     display: block;
@@ -75,7 +124,13 @@ export default function ReaderScreen() {
                     color: #888;
                     font-family: system-ui, sans-serif;
                     text-align: center;
-                    padding: 40px;
+                    padding: 100px 40px;
+                }
+                .page-divider {
+                    width: 80%;
+                    height: 1px;
+                    background: rgba(128,128,128,0.2);
+                    margin: 8px 0;
                 }
             </style>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -88,6 +143,7 @@ export default function ReaderScreen() {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
                 
                 let pdfDoc = null;
+                let currentZoom = 1;
                 const container = document.getElementById('pages-container');
                 
                 async function loadPDF(base64) {
@@ -95,18 +151,20 @@ export default function ReaderScreen() {
                         const loadingTask = pdfjsLib.getDocument({ data: atob(base64) });
                         pdfDoc = await loadingTask.promise;
                         
-                        // Clear loading message
                         container.innerHTML = '';
                         
-                        // Notify RN of total pages
                         window.ReactNativeWebView.postMessage(JSON.stringify({
                             type: 'loaded',
                             totalPages: pdfDoc.numPages
                         }));
                         
-                        // Render all pages
                         for (let i = 1; i <= pdfDoc.numPages; i++) {
                             await renderPage(i);
+                            if (i < pdfDoc.numPages) {
+                                const divider = document.createElement('div');
+                                divider.className = 'page-divider';
+                                container.appendChild(divider);
+                            }
                         }
                     } catch (error) {
                         window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -119,13 +177,11 @@ export default function ReaderScreen() {
                 async function renderPage(num) {
                     const page = await pdfDoc.getPage(num);
                     
-                    // Calculate scale to fit width
-                    const containerWidth = window.innerWidth - 40;
+                    const containerWidth = window.innerWidth - 32;
                     const viewport = page.getViewport({ scale: 1 });
-                    const scale = containerWidth / viewport.width;
-                    const scaledViewport = page.getViewport({ scale: scale * 1.5 });
+                    const scale = (containerWidth / viewport.width) * 1.5;
+                    const scaledViewport = page.getViewport({ scale });
                     
-                    // Create wrapper and canvas
                     const wrapper = document.createElement('div');
                     wrapper.className = 'page-wrapper';
                     wrapper.id = 'page-' + num;
@@ -135,7 +191,13 @@ export default function ReaderScreen() {
                     canvas.width = scaledViewport.width;
                     canvas.height = scaledViewport.height;
                     
+                    // Page number label
+                    const pageLabel = document.createElement('div');
+                    pageLabel.className = 'page-number';
+                    pageLabel.textContent = 'Page ' + num;
+                    
                     wrapper.appendChild(canvas);
+                    wrapper.appendChild(pageLabel);
                     container.appendChild(wrapper);
                     
                     await page.render({
@@ -144,10 +206,23 @@ export default function ReaderScreen() {
                     }).promise;
                 }
                 
-                // Track scroll for page updates
+                // Scroll tracking with debounce
                 let lastReportedPage = 1;
+                let scrollTimeout = null;
+                let isCurrentlyScrolling = false;
+                
                 document.addEventListener('scroll', function() {
                     if (!pdfDoc) return;
+                    
+                    // Notify scroll start
+                    if (!isCurrentlyScrolling) {
+                        isCurrentlyScrolling = true;
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'scrollStart'
+                        }));
+                    }
+                    
+                    clearTimeout(scrollTimeout);
                     
                     const pages = document.querySelectorAll('.page-wrapper');
                     const viewportMiddle = window.innerHeight / 2;
@@ -166,34 +241,79 @@ export default function ReaderScreen() {
                             break;
                         }
                     }
+                    
+                    // Debounced scroll end and save
+                    scrollTimeout = setTimeout(function() {
+                        isCurrentlyScrolling = false;
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'scrollEnd',
+                            page: lastReportedPage,
+                            scrollY: window.scrollY
+                        }));
+                    }, 150);
                 });
                 
-                document.addEventListener('message', function(e) {
-                    const data = JSON.parse(e.data);
+                // Handle screen tap for chrome toggle
+                let lastTapTime = 0;
+                document.addEventListener('click', function(e) {
+                    const now = Date.now();
+                    
+                    // Double-tap detection for zoom
+                    if (now - lastTapTime < 300) {
+                        // Double tap - toggle zoom
+                        currentZoom = currentZoom === 1 ? 2 : 1;
+                        document.body.style.zoom = currentZoom;
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'zoomChanged',
+                            zoom: currentZoom
+                        }));
+                    } else {
+                        // Single tap - toggle chrome
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'tap'
+                        }));
+                    }
+                    
+                    lastTapTime = now;
+                });
+                
+                // Message handlers
+                function handleMessage(data) {
                     if (data.type === 'loadPDF') {
                         loadPDF(data.base64);
+                    } else if (data.type === 'scrollToPage') {
+                        const page = document.getElementById('page-' + data.page);
+                        if (page) {
+                            page.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
                     }
+                }
+                
+                document.addEventListener('message', function(e) {
+                    handleMessage(JSON.parse(e.data));
                 });
                 
                 window.addEventListener('message', function(e) {
-                    const data = JSON.parse(e.data);
-                    if (data.type === 'loadPDF') {
-                        loadPDF(data.base64);
-                    }
+                    handleMessage(JSON.parse(e.data));
                 });
             </script>
         </body>
         </html>
     `;
 
-    const webViewRef = React.useRef<WebView>(null);
+    const webViewRef = useRef<WebView>(null);
 
     /**
      * Load PDF on mount
      */
-    React.useEffect(() => {
+    useEffect(() => {
         const loadPDF = async () => {
             try {
+                // Update last opened time
+                if (docId > 0) {
+                    updateLastOpenedAt(docId).catch(console.error);
+                }
+
                 const FileSystem = await import('expo-file-system/legacy');
                 const base64 = await FileSystem.readAsStringAsync(pdfUri, {
                     encoding: 'base64',
@@ -213,7 +333,48 @@ export default function ReaderScreen() {
         if (pdfUri) {
             loadPDF();
         }
-    }, [pdfUri]);
+
+        return () => {
+            // Cleanup timers
+            if (chromeTimer.current) clearTimeout(chromeTimer.current);
+            if (scrollTimer.current) clearTimeout(scrollTimer.current);
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+        };
+    }, [pdfUri, docId]);
+
+    /**
+     * Auto-hide chrome after delay
+     */
+    const startChromeTimer = useCallback(() => {
+        if (chromeTimer.current) {
+            clearTimeout(chromeTimer.current);
+        }
+        chromeTimer.current = setTimeout(() => {
+            setChromeVisible(false);
+        }, animations.autoHideDelay);
+    }, []);
+
+    /**
+     * Show chrome and start auto-hide timer
+     */
+    const showChrome = useCallback(() => {
+        setChromeVisible(true);
+        startChromeTimer();
+    }, [startChromeTimer]);
+
+    /**
+     * Toggle chrome visibility
+     */
+    const toggleChrome = useCallback(() => {
+        if (chromeVisible) {
+            setChromeVisible(false);
+            if (chromeTimer.current) {
+                clearTimeout(chromeTimer.current);
+            }
+        } else {
+            showChrome();
+        }
+    }, [chromeVisible, showChrome]);
 
     /**
      * Handle WebView messages
@@ -222,90 +383,157 @@ export default function ReaderScreen() {
         try {
             const data = JSON.parse(event.nativeEvent.data);
 
-            if (data.type === 'loaded') {
-                setTotalPages(data.totalPages);
-                setIsLoading(false);
-            } else if (data.type === 'pageChanged') {
-                setCurrentPage(data.page);
-                if (docId > 0) {
-                    updateLastReadPage(docId, data.page).catch(console.error);
-                }
-            } else if (data.type === 'error') {
-                setError(data.message);
-                setIsLoading(false);
+            switch (data.type) {
+                case 'loaded':
+                    setTotalPages(data.totalPages);
+                    setIsLoading(false);
+                    // Scroll to saved page
+                    const savedPage = parseInt(params.lastReadPage || '1', 10);
+                    if (savedPage > 1) {
+                        setTimeout(() => {
+                            webViewRef.current?.postMessage(JSON.stringify({
+                                type: 'scrollToPage',
+                                page: savedPage
+                            }));
+                        }, 500);
+                    }
+                    break;
+
+                case 'pageChanged':
+                    setCurrentPage(data.page);
+                    break;
+
+                case 'scrollStart':
+                    setIsScrolling(true);
+                    // Hide chrome on scroll
+                    setChromeVisible(false);
+                    if (chromeTimer.current) {
+                        clearTimeout(chromeTimer.current);
+                    }
+                    break;
+
+                case 'scrollEnd':
+                    setIsScrolling(false);
+                    // Debounced save
+                    if (saveTimer.current) {
+                        clearTimeout(saveTimer.current);
+                    }
+                    saveTimer.current = setTimeout(() => {
+                        if (docId > 0) {
+                            updateLastReadPage(docId, data.page).catch(console.error);
+                        }
+                    }, animations.scrollDebounce);
+                    break;
+
+                case 'tap':
+                    toggleChrome();
+                    break;
+
+                case 'error':
+                    setError(data.message);
+                    setIsLoading(false);
+                    break;
             }
         } catch (err) {
             console.error('WebView message error:', err);
         }
-    }, [docId]);
-
-    /**
-     * Navigate to specific page
-     */
-    const goToPage = useCallback((page: number) => {
-        if (page >= 1 && page <= totalPages) {
-            webViewRef.current?.postMessage(JSON.stringify({
-                type: 'setPage',
-                page
-            }));
-        }
-    }, [totalPages]);
-
-    /**
-     * Toggle RSVP mode
-     */
-    const toggleRSVP = useCallback(() => {
-        setShowRSVP(prev => !prev);
-    }, []);
+    }, [docId, params.lastReadPage, toggleChrome]);
 
     /**
      * Go back to library
      */
     const goBack = useCallback(() => {
+        // Save progress before leaving
+        if (docId > 0) {
+            updateLastReadPage(docId, currentPage).catch(console.error);
+        }
         router.back();
-    }, [router]);
+    }, [router, docId, currentPage]);
+
+    /**
+     * Handle RSVP tap (opens paused)
+     */
+    const handleRSVPTap = useCallback(() => {
+        setChromeVisible(false);
+        setShowRSVP(true);
+    }, []);
+
+    /**
+     * Handle RSVP long press (instant play)
+     */
+    const handleRSVPLongPress = useCallback(() => {
+        setChromeVisible(false);
+        setShowRSVP(true);
+    }, []);
+
+    /**
+     * Close RSVP overlay
+     */
+    const handleRSVPClose = useCallback(() => {
+        setShowRSVP(false);
+
+        // Sync position from RSVP if available
+        const rsvpState = rsvpStore;
+        if (rsvpState.currentPageNum > 0) {
+            setCurrentPage(rsvpState.currentPageNum);
+            if (docId > 0) {
+                updateLastReadPage(docId, rsvpState.currentPageNum).catch(console.error);
+            }
+            // Scroll to the current page
+            webViewRef.current?.postMessage(JSON.stringify({
+                type: 'scrollToPage',
+                page: rsvpState.currentPageNum
+            }));
+        }
+    }, [docId, rsvpStore]);
+
+    /**
+     * Handle menu press
+     */
+    const handleMenuPress = useCallback(() => {
+        setShowOptionsSheet(true);
+    }, []);
+
+    /**
+     * Go to specific page
+     */
+    const handleGoToPage = useCallback(() => {
+        // TODO: Implement go-to-page dialog
+        setShowOptionsSheet(false);
+    }, []);
+
+    // Determine effective theme
+    const effectiveTheme = readerTheme === 'auto'
+        ? (systemColorScheme === 'dark' ? 'dark' : 'light')
+        : readerTheme;
 
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
-            <StatusBar style="light" />
-
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity style={styles.backButton} onPress={goBack}>
-                    <Ionicons name="chevron-back" size={24} color="#fff" />
-                </TouchableOpacity>
-
-                <View style={styles.headerCenter}>
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {docName}
-                    </Text>
-                    <Text style={styles.headerSubtitle}>
-                        {currentPage} / {totalPages}
-                    </Text>
-                </View>
-
-                <TouchableOpacity style={styles.rsvpButton} onPress={toggleRSVP}>
-                    <Ionicons name="flash" size={20} color="#000" />
-                    <Text style={styles.rsvpButtonText}>RSVP</Text>
-                </TouchableOpacity>
-            </View>
+        <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
+            <StatusBar style={effectiveTheme === 'dark' ? 'light' : 'dark'} />
 
             {/* PDF Viewer */}
             <View style={styles.pdfContainer}>
                 {isLoading && (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#fff" />
-                        <Text style={styles.loadingText}>Loading PDF...</Text>
+                        <ActivityIndicator size="large" color={themeColors.accent} />
+                        <Text style={[styles.loadingText, { color: themeColors.secondaryText }]}>
+                            Loading PDF...
+                        </Text>
                     </View>
                 )}
 
                 {error && (
                     <View style={styles.errorContainer}>
-                        <Ionicons name="alert-circle" size={48} color="#ff4444" />
-                        <Text style={styles.errorText}>{error}</Text>
-                        <TouchableOpacity style={styles.retryButton} onPress={goBack}>
-                            <Text style={styles.retryButtonText}>Go Back</Text>
-                        </TouchableOpacity>
+                        <View style={styles.errorSheet}>
+                            <Ionicons name="alert-circle" size={48} color="#ff4444" />
+                            <Text style={styles.errorTitle}>Unable to Open Document</Text>
+                            <Text style={styles.errorText}>
+                                This PDF file cannot be opened. It may be corrupted or protected by DRM.
+                            </Text>
+                            <TouchableOpacity style={styles.errorButton} onPress={goBack}>
+                                <Text style={styles.errorButtonText}>Return to Library</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 )}
 
@@ -317,16 +545,51 @@ export default function ReaderScreen() {
                         style={styles.webview}
                         javaScriptEnabled
                         originWhitelist={['*']}
+                        scrollEnabled={true}
+                        bounces={true}
                     />
                 )}
             </View>
+
+            {/* Page Indicator (during scroll) */}
+            <PageIndicator visible={isScrolling} currentPage={currentPage} />
+
+            {/* Top Bar (auto-hiding) */}
+            <ReaderTopBar
+                visible={chromeVisible}
+                title={docName}
+                onBack={goBack}
+                onRSVPTap={handleRSVPTap}
+                onRSVPLongPress={handleRSVPLongPress}
+                onMenuPress={handleMenuPress}
+                theme={effectiveTheme as 'light' | 'dark' | 'sepia'}
+            />
+
+            {/* Footer (auto-hiding) */}
+            <ReaderFooter
+                visible={chromeVisible}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                theme={effectiveTheme as 'light' | 'dark' | 'sepia'}
+            />
+
+            {/* Reading Options Sheet */}
+            <ReadingOptionsSheet
+                visible={showOptionsSheet}
+                onClose={() => setShowOptionsSheet(false)}
+                currentTheme={readerTheme}
+                onThemeChange={setReaderTheme}
+                brightness={brightness}
+                onBrightnessChange={setBrightness}
+                onGoToPage={handleGoToPage}
+            />
 
             {/* RSVP Overlay */}
             <RSVPOverlay
                 visible={showRSVP}
                 docId={docId}
                 pdfUri={pdfUri}
-                onClose={() => setShowRSVP(false)}
+                onClose={handleRSVPClose}
             />
         </SafeAreaView>
     );
@@ -335,60 +598,13 @@ export default function ReaderScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#222',
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#222',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerCenter: {
-        flex: 1,
-        marginHorizontal: 12,
-    },
-    headerTitle: {
-        fontFamily: 'Inter_500Medium',
-        fontSize: 16,
-        color: '#fff',
-    },
-    headerSubtitle: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 12,
-        color: '#888',
-        marginTop: 2,
-    },
-    rsvpButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#ff4444',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 16,
-        gap: 4,
-    },
-    rsvpButtonText: {
-        fontFamily: 'Inter_600SemiBold',
-        fontSize: 12,
-        color: '#000',
     },
     pdfContainer: {
         flex: 1,
-        backgroundColor: '#111',
     },
     webview: {
         flex: 1,
-        backgroundColor: '#111',
+        backgroundColor: 'transparent',
     },
     loadingContainer: {
         ...StyleSheet.absoluteFillObject,
@@ -399,7 +615,6 @@ const styles = StyleSheet.create({
     loadingText: {
         fontFamily: 'Inter_400Regular',
         fontSize: 14,
-        color: '#888',
         marginTop: 12,
     },
     errorContainer: {
@@ -407,54 +622,40 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         padding: 40,
+        backgroundColor: '#000',
+    },
+    errorSheet: {
+        backgroundColor: '#1E1E1E',
+        borderRadius: 16,
+        padding: 32,
+        alignItems: 'center',
+        maxWidth: 320,
+    },
+    errorTitle: {
+        fontFamily: 'Inter_700Bold',
+        fontSize: 20,
+        color: '#FFFFFF',
+        marginTop: 16,
+        textAlign: 'center',
     },
     errorText: {
         fontFamily: 'Inter_400Regular',
         fontSize: 16,
-        color: '#ff4444',
+        color: '#888',
         textAlign: 'center',
-        marginTop: 16,
+        marginTop: 8,
         marginBottom: 24,
+        lineHeight: 22,
     },
-    retryButton: {
+    errorButton: {
         backgroundColor: '#333',
         paddingHorizontal: 24,
         paddingVertical: 12,
         borderRadius: 8,
     },
-    retryButtonText: {
+    errorButtonText: {
         fontFamily: 'Inter_500Medium',
-        fontSize: 14,
+        fontSize: 16,
         color: '#fff',
-    },
-    footer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        backgroundColor: '#111',
-        borderTopWidth: 1,
-        borderTopColor: '#222',
-    },
-    navButton: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor: '#222',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    navButtonDisabled: {
-        backgroundColor: '#111',
-    },
-    pageIndicator: {
-        flex: 1,
-        alignItems: 'center',
-    },
-    pageText: {
-        fontFamily: 'Inter_500Medium',
-        fontSize: 14,
-        color: '#888',
     },
 });
