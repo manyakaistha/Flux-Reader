@@ -1,195 +1,334 @@
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useRef, useState } from 'react';
-import { Dimensions, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Pdf from 'react-native-pdf';
-import Animated, { runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import React, { useCallback, useState } from 'react';
+import {
+    ActivityIndicator,
+    Dimensions,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 
+import { RSVPOverlay } from '@/src/components/rsvp/RSVPOverlay';
 import { updateLastReadPage } from '@/src/database/db';
 
-const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ReaderScreen() {
-    const { uri, name, id, lastReadPage } = useLocalSearchParams();
+    const params = useLocalSearchParams<{
+        uri: string;
+        name: string;
+        id: string;
+        lastReadPage: string;
+    }>();
 
-    // State
-    const [totalPages, setTotalPages] = useState(0);
-    const [controlsVisible, setControlsVisible] = useState(true);
-    const [sliderWidth, setSliderWidth] = useState(0);
-
-    // This is the source of truth for the PDF viewer
-    const [pdfPage, setPdfPage] = useState(Number(lastReadPage) || 1);
-
-    const pdfRef = useRef<Pdf>(null);
     const router = useRouter();
 
-    // Shared Values for Animation
-    const headerOpacity = useSharedValue(1);
-    const footerOpacity = useSharedValue(1);
-    const isDragging = useSharedValue(false);
-    const sliderProgress = useSharedValue(0); // 0 to 1
+    const [currentPage, setCurrentPage] = useState(parseInt(params.lastReadPage || '1', 10));
+    const [totalPages, setTotalPages] = useState(0);
+    const [isLoading, setIsLoading] = useState(true);
+    const [showRSVP, setShowRSVP] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    useEffect(() => {
-        headerOpacity.value = withTiming(controlsVisible ? 1 : 0);
-        footerOpacity.value = withTiming(controlsVisible ? 1 : 0);
-    }, [controlsVisible]);
+    const docId = parseInt(params.id || '0', 10);
+    const pdfUri = params.uri || '';
+    const docName = params.name || 'Document';
 
-    // Sync slider progress when page changes externally
-    useEffect(() => {
-        if (totalPages > 0 && !isDragging.value) {
-            const progress = (pdfPage / totalPages);
-            sliderProgress.value = withTiming(progress, { duration: 200 });
-        }
-    }, [pdfPage, totalPages]);
+    /**
+     * PDF viewer HTML with pdf.js - Vertical Scroll Mode
+     */
+    const pdfViewerHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body { 
+                    background: #1a1a1a;
+                    overflow-y: auto;
+                    -webkit-overflow-scrolling: touch;
+                }
+                #pages-container {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    padding: 20px 10px;
+                    gap: 20px;
+                }
+                .page-wrapper {
+                    background: #fff;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+                    border-radius: 4px;
+                    overflow: hidden;
+                }
+                canvas {
+                    display: block;
+                    width: 100%;
+                    height: auto;
+                }
+                #loading {
+                    color: #888;
+                    font-family: system-ui, sans-serif;
+                    text-align: center;
+                    padding: 40px;
+                }
+            </style>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+        </head>
+        <body>
+            <div id="pages-container">
+                <div id="loading">Loading PDF...</div>
+            </div>
+            <script>
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                
+                let pdfDoc = null;
+                const container = document.getElementById('pages-container');
+                
+                async function loadPDF(base64) {
+                    try {
+                        const loadingTask = pdfjsLib.getDocument({ data: atob(base64) });
+                        pdfDoc = await loadingTask.promise;
+                        
+                        // Clear loading message
+                        container.innerHTML = '';
+                        
+                        // Notify RN of total pages
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'loaded',
+                            totalPages: pdfDoc.numPages
+                        }));
+                        
+                        // Render all pages
+                        for (let i = 1; i <= pdfDoc.numPages; i++) {
+                            await renderPage(i);
+                        }
+                    } catch (error) {
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'error',
+                            message: error.message
+                        }));
+                    }
+                }
+                
+                async function renderPage(num) {
+                    const page = await pdfDoc.getPage(num);
+                    
+                    // Calculate scale to fit width
+                    const containerWidth = window.innerWidth - 40;
+                    const viewport = page.getViewport({ scale: 1 });
+                    const scale = containerWidth / viewport.width;
+                    const scaledViewport = page.getViewport({ scale: scale * 1.5 });
+                    
+                    // Create wrapper and canvas
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'page-wrapper';
+                    wrapper.id = 'page-' + num;
+                    
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = scaledViewport.width;
+                    canvas.height = scaledViewport.height;
+                    
+                    wrapper.appendChild(canvas);
+                    container.appendChild(wrapper);
+                    
+                    await page.render({
+                        canvasContext: ctx,
+                        viewport: scaledViewport
+                    }).promise;
+                }
+                
+                // Track scroll for page updates
+                let lastReportedPage = 1;
+                document.addEventListener('scroll', function() {
+                    if (!pdfDoc) return;
+                    
+                    const pages = document.querySelectorAll('.page-wrapper');
+                    const viewportMiddle = window.innerHeight / 2;
+                    
+                    for (let i = 0; i < pages.length; i++) {
+                        const rect = pages[i].getBoundingClientRect();
+                        if (rect.top <= viewportMiddle && rect.bottom >= viewportMiddle) {
+                            const pageNum = i + 1;
+                            if (pageNum !== lastReportedPage) {
+                                lastReportedPage = pageNum;
+                                window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'pageChanged',
+                                    page: pageNum
+                                }));
+                            }
+                            break;
+                        }
+                    }
+                });
+                
+                document.addEventListener('message', function(e) {
+                    const data = JSON.parse(e.data);
+                    if (data.type === 'loadPDF') {
+                        loadPDF(data.base64);
+                    }
+                });
+                
+                window.addEventListener('message', function(e) {
+                    const data = JSON.parse(e.data);
+                    if (data.type === 'loadPDF') {
+                        loadPDF(data.base64);
+                    }
+                });
+            </script>
+        </body>
+        </html>
+    `;
 
-    const headerStyle = useAnimatedStyle(() => ({
-        opacity: headerOpacity.value,
-        transform: [{ translateY: withTiming(controlsVisible ? 0 : -100) }],
-    }));
+    const webViewRef = React.useRef<WebView>(null);
 
-    const footerStyle = useAnimatedStyle(() => ({
-        opacity: footerOpacity.value,
-        transform: [{ translateY: withTiming(controlsVisible ? 0 : 200) }],
-    }));
+    /**
+     * Load PDF on mount
+     */
+    React.useEffect(() => {
+        const loadPDF = async () => {
+            try {
+                const FileSystem = await import('expo-file-system/legacy');
+                const base64 = await FileSystem.readAsStringAsync(pdfUri, {
+                    encoding: 'base64',
+                });
 
-    const sliderFillStyle = useAnimatedStyle(() => ({
-        width: `${sliderProgress.value * 100}%`
-    }));
-
-    const sliderKnobStyle = useAnimatedStyle(() => ({
-        left: `${sliderProgress.value * 100}%`
-    }));
-
-    // Animated Props for the Page Indicator Text
-    // This allows us to update the text WITHOUT re-rendering the component
-    const animatedTextProps = useAnimatedProps(() => {
-        if (totalPages === 0) return { text: "Loading..." };
-        const page = Math.max(1, Math.round(sliderProgress.value * totalPages));
-        return {
-            text: `${page} / ${totalPages}`
+                webViewRef.current?.postMessage(JSON.stringify({
+                    type: 'loadPDF',
+                    base64
+                }));
+            } catch (err) {
+                console.error('Failed to load PDF:', err);
+                setError('Failed to load PDF file');
+                setIsLoading(false);
+            }
         };
-    });
 
-    const toggleControls = () => {
-        setControlsVisible(!controlsVisible);
-    };
-
-    const onPageChanged = (page: number, numberOfPages: number) => {
-        if (!isDragging.value) {
-            setPdfPage(page);
+        if (pdfUri) {
+            loadPDF();
         }
-        setTotalPages(numberOfPages);
-        if (id) {
-            updateLastReadPage(Number(id), page);
+    }, [pdfUri]);
+
+    /**
+     * Handle WebView messages
+     */
+    const handleWebViewMessage = useCallback((event: { nativeEvent: { data: string } }) => {
+        try {
+            const data = JSON.parse(event.nativeEvent.data);
+
+            if (data.type === 'loaded') {
+                setTotalPages(data.totalPages);
+                setIsLoading(false);
+            } else if (data.type === 'pageChanged') {
+                setCurrentPage(data.page);
+                if (docId > 0) {
+                    updateLastReadPage(docId, data.page).catch(console.error);
+                }
+            } else if (data.type === 'error') {
+                setError(data.message);
+                setIsLoading(false);
+            }
+        } catch (err) {
+            console.error('WebView message error:', err);
         }
-    };
+    }, [docId]);
 
-    // JS helper called on drag end to commit the page
-    const commitPage = (progress: number) => {
-        if (totalPages === 0) return;
-        const newPage = Math.max(1, Math.round(progress * totalPages));
-        setPdfPage(newPage);
-        pdfRef.current?.setPage(newPage);
-    };
+    /**
+     * Navigate to specific page
+     */
+    const goToPage = useCallback((page: number) => {
+        if (page >= 1 && page <= totalPages) {
+            webViewRef.current?.postMessage(JSON.stringify({
+                type: 'setPage',
+                page
+            }));
+        }
+    }, [totalPages]);
 
-    const panGesture = Gesture.Pan()
-        .onBegin(() => {
-            isDragging.value = true;
-        })
-        .onUpdate((e) => {
-            if (sliderWidth === 0) return;
-            const rawProgress = e.x / sliderWidth;
-            const clampedProgress = Math.min(Math.max(rawProgress, 0), 1);
-            sliderProgress.value = clampedProgress;
-            // No runOnJS here! Completely native UI thread update.
-        })
-        .onFinalize(() => {
-            isDragging.value = false;
-            runOnJS(commitPage)(sliderProgress.value);
-        });
+    /**
+     * Toggle RSVP mode
+     */
+    const toggleRSVP = useCallback(() => {
+        setShowRSVP(prev => !prev);
+    }, []);
+
+    /**
+     * Go back to library
+     */
+    const goBack = useCallback(() => {
+        router.back();
+    }, [router]);
 
     return (
-        <GestureHandlerRootView style={styles.container}>
-            <StatusBar hidden={!controlsVisible} style="light" />
+        <SafeAreaView style={styles.container} edges={['top']}>
+            <StatusBar style="light" />
 
-            <Pdf
-                ref={pdfRef}
-                source={{ uri: uri as string, cache: true }}
-                onLoadComplete={(numberOfPages) => {
-                    setTotalPages(numberOfPages);
-                }}
-                onPageChanged={onPageChanged}
-                onError={(error) => {
-                    console.log(error);
-                }}
-                onPressLink={(linkUri) => {
-                    console.log(`Link pressed: ${linkUri}`);
-                }}
-                style={styles.pdf}
-                page={pdfPage}
-                singlePage={false}
-                onTap={toggleControls}
-                usePDFKit={Platform.OS === 'ios'}
+            {/* Header */}
+            <View style={styles.header}>
+                <TouchableOpacity style={styles.backButton} onPress={goBack}>
+                    <Ionicons name="chevron-back" size={24} color="#fff" />
+                </TouchableOpacity>
+
+                <View style={styles.headerCenter}>
+                    <Text style={styles.headerTitle} numberOfLines={1}>
+                        {docName}
+                    </Text>
+                    <Text style={styles.headerSubtitle}>
+                        {currentPage} / {totalPages}
+                    </Text>
+                </View>
+
+                <TouchableOpacity style={styles.rsvpButton} onPress={toggleRSVP}>
+                    <Ionicons name="flash" size={20} color="#000" />
+                    <Text style={styles.rsvpButtonText}>RSVP</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* PDF Viewer */}
+            <View style={styles.pdfContainer}>
+                {isLoading && (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#fff" />
+                        <Text style={styles.loadingText}>Loading PDF...</Text>
+                    </View>
+                )}
+
+                {error && (
+                    <View style={styles.errorContainer}>
+                        <Ionicons name="alert-circle" size={48} color="#ff4444" />
+                        <Text style={styles.errorText}>{error}</Text>
+                        <TouchableOpacity style={styles.retryButton} onPress={goBack}>
+                            <Text style={styles.retryButtonText}>Go Back</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                {!error && (
+                    <WebView
+                        ref={webViewRef}
+                        source={{ html: pdfViewerHtml }}
+                        onMessage={handleWebViewMessage}
+                        style={styles.webview}
+                        javaScriptEnabled
+                        originWhitelist={['*']}
+                    />
+                )}
+            </View>
+
+            {/* RSVP Overlay */}
+            <RSVPOverlay
+                visible={showRSVP}
+                docId={docId}
+                pdfUri={pdfUri}
+                onClose={() => setShowRSVP(false)}
             />
-
-            {/* Top Header */}
-            <Animated.View style={[styles.headerContainer, headerStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
-                <View style={styles.headerPillContainer}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.glassPillSmall}>
-                        <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-                        <Ionicons name="arrow-back" size={24} color="#fff" />
-                    </TouchableOpacity>
-
-                    <View style={styles.glassPillLarge}>
-                        <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-                        <Text style={styles.headerTitle} numberOfLines={1}>{name}</Text>
-                    </View>
-
-                    <TouchableOpacity style={styles.glassPillSmall}>
-                        <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
-                        <Ionicons name="list" size={24} color="#fff" />
-                    </TouchableOpacity>
-                </View>
-            </Animated.View>
-
-            {/* Bottom Control Deck */}
-            <Animated.View style={[styles.footerContainer, footerStyle]} pointerEvents={controlsVisible ? 'auto' : 'none'}>
-                <View style={styles.glassDeck}>
-                    <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
-
-                    {/* Page Indicator Capsule */}
-                    <View style={styles.capsuleContainer}>
-                        <View style={styles.pageCapsule}>
-                            {/* We use a readonly TextInput to display animated values without re-renders */}
-                            <AnimatedTextInput
-                                underlineColorAndroid="transparent"
-                                editable={false}
-                                value={`${pdfPage} / ${totalPages}`} // Initial value
-                                animatedProps={animatedTextProps}
-                                style={styles.capsuleText}
-                            />
-                        </View>
-                    </View>
-
-                    {/* Scrubber */}
-                    <View style={styles.scrubberRow}>
-                        <View
-                            style={styles.sliderTrack}
-                            onLayout={(e) => setSliderWidth(e.nativeEvent.layout.width)}
-                        >
-                            <Animated.View style={[styles.sliderFill, sliderFillStyle]} />
-                            <GestureDetector gesture={panGesture}>
-                                <Animated.View style={[styles.sliderKnob, sliderKnobStyle]} />
-                            </GestureDetector>
-                        </View>
-                    </View>
-                </View>
-            </Animated.View>
-
-        </GestureHandlerRootView>
+        </SafeAreaView>
     );
 }
 
@@ -198,124 +337,124 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: '#000',
     },
-    pdf: {
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#222',
+    },
+    backButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#222',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    headerCenter: {
         flex: 1,
-        width: Dimensions.get('window').width,
-        height: Dimensions.get('window').height,
+        marginHorizontal: 12,
+    },
+    headerTitle: {
+        fontFamily: 'Inter_500Medium',
+        fontSize: 16,
+        color: '#fff',
+    },
+    headerSubtitle: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 12,
+        color: '#888',
+        marginTop: 2,
+    },
+    rsvpButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#ff4444',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 16,
+        gap: 4,
+    },
+    rsvpButtonText: {
+        fontFamily: 'Inter_600SemiBold',
+        fontSize: 12,
+        color: '#000',
+    },
+    pdfContainer: {
+        flex: 1,
+        backgroundColor: '#111',
+    },
+    webview: {
+        flex: 1,
+        backgroundColor: '#111',
+    },
+    loadingContainer: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
         backgroundColor: '#000',
     },
-    headerContainer: {
-        position: 'absolute',
-        top: 50,
-        left: 0,
-        right: 0,
-        alignItems: 'center',
-        zIndex: 10,
+    loadingText: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 14,
+        color: '#888',
+        marginTop: 12,
     },
-    headerPillContainer: {
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 40,
+    },
+    errorText: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 16,
+        color: '#ff4444',
+        textAlign: 'center',
+        marginTop: 16,
+        marginBottom: 24,
+    },
+    retryButton: {
+        backgroundColor: '#333',
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+        borderRadius: 8,
+    },
+    retryButtonText: {
+        fontFamily: 'Inter_500Medium',
+        fontSize: 14,
+        color: '#fff',
+    },
+    footer: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        width: '90%',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        backgroundColor: '#111',
+        borderTopWidth: 1,
+        borderTopColor: '#222',
     },
-    glassPillSmall: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
-        overflow: 'hidden',
+    navButton: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: '#222',
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.2)',
     },
-    glassPillLarge: {
+    navButtonDisabled: {
+        backgroundColor: '#111',
+    },
+    pageIndicator: {
         flex: 1,
-        height: 50,
-        marginHorizontal: 10,
-        borderRadius: 25,
-        overflow: 'hidden',
-        justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.2)',
-        paddingHorizontal: 20,
     },
-    headerTitle: {
-        color: '#fff',
-        fontFamily: 'InstrumentSerif_400Regular',
-        fontSize: 22,
-    },
-    footerContainer: {
-        position: 'absolute',
-        bottom: 30,
-        left: 0,
-        right: 0,
-        alignItems: 'center',
-        zIndex: 10,
-    },
-    glassDeck: {
-        width: '94%',
-        borderRadius: 35,
-        overflow: 'hidden',
-        backgroundColor: 'rgba(20,20,20,0.6)',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.15)',
-        paddingVertical: 20,
-        paddingHorizontal: 10,
-    },
-    capsuleContainer: {
-        alignItems: 'center',
-        marginBottom: 10,
-    },
-    pageCapsule: {
-        backgroundColor: 'rgba(70, 70, 70, 0.9)', // Slightly darker for better contrast
-        paddingVertical: 8,
-        paddingHorizontal: 18,
-        borderRadius: 20,
-        minWidth: 100,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    capsuleText: {
-        color: '#fff',
-        fontFamily: 'Inter_400Regular',
+    pageText: {
+        fontFamily: 'Inter_500Medium',
         fontSize: 14,
-        textAlign: 'center',
-        padding: 0, // Reset default TextInput padding
-    },
-    scrubberRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 20,
-        height: 40,
-    },
-    sliderTrack: {
-        flex: 1,
-        height: 4,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        marginHorizontal: 10,
-        borderRadius: 2,
-        position: 'relative',
-        justifyContent: 'center',
-    },
-    sliderFill: {
-        height: '100%',
-        backgroundColor: '#fff',
-        borderRadius: 2,
-    },
-    sliderKnob: {
-        position: 'absolute',
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: '#fff',
-        top: -10,
-        marginLeft: -12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
+        color: '#888',
     },
 });

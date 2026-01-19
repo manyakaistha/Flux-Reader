@@ -1,30 +1,70 @@
-
-import { addDocument, Document, getDocuments, initDatabase } from '@/src/database/db';
+import {
+    DocumentCard,
+    DocumentDetailsSheet,
+    DocumentRow,
+    EmptyState,
+    SearchBar,
+    SORT_OPTIONS,
+    SortBottomSheet,
+} from '@/src/components/library';
+import {
+    addDocument,
+    deleteDocument,
+    Document,
+    getDocuments,
+    initDatabase,
+    SortOption,
+    updateLastOpenedAt,
+} from '@/src/database/db';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+    Dimensions,
+    FlatList,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const NUM_COLUMNS = 3;
+const CARD_GAP = 12;
+const HORIZONTAL_PADDING = 16;
+const CARD_WIDTH = (SCREEN_WIDTH - HORIZONTAL_PADDING * 2 - CARD_GAP * (NUM_COLUMNS - 1)) / NUM_COLUMNS;
 
 export default function LibraryScreen() {
     const [documents, setDocuments] = useState<Document[]>([]);
+    const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+    const [sortOption, setSortOption] = useState<SortOption>('latest_added');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [showSearch, setShowSearch] = useState(false);
+    const [showSortSheet, setShowSortSheet] = useState(false);
+    const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
+    const [showDetailsSheet, setShowDetailsSheet] = useState(false);
     const router = useRouter();
 
     const loadDocuments = useCallback(async () => {
         try {
-            const docs = await getDocuments();
+            const docs = await getDocuments(sortOption);
             setDocuments(docs);
         } catch (error) {
             console.error('Error loading documents:', error);
         }
-    }, []);
+    }, [sortOption]);
 
     useEffect(() => {
         initDatabase().then(loadDocuments);
     }, []);
+
+    useEffect(() => {
+        loadDocuments();
+    }, [sortOption]);
 
     useFocusEffect(
         useCallback(() => {
@@ -32,16 +72,28 @@ export default function LibraryScreen() {
         }, [loadDocuments])
     );
 
+    // Filter documents by search query
+    const filteredDocuments = useMemo(() => {
+        if (!searchQuery.trim()) return documents;
+        const query = searchQuery.toLowerCase();
+        return documents.filter(
+            (doc) =>
+                doc.name.toLowerCase().includes(query) ||
+                doc.author?.toLowerCase().includes(query)
+        );
+    }, [documents, searchQuery]);
+
     const importPdf = async () => {
         try {
             const result = await DocumentPicker.getDocumentAsync({
-                type: 'application/pdf',
+                type: ['application/pdf', 'application/epub+zip'],
                 copyToCacheDirectory: true,
             });
 
             if (result.canceled) return;
 
-            const { uri, name } = result.assets[0];
+            const asset = result.assets[0];
+            const { uri, name, size, mimeType } = asset;
 
             // Use new FileSystem API
             const sourceFile = new File(uri);
@@ -49,61 +101,198 @@ export default function LibraryScreen() {
 
             // Copy the file
             if (destFile.exists) {
-                // If destFile exists, delete it before copying to ensure overwrite
                 await destFile.delete();
             }
             await sourceFile.copy(destFile);
 
-            // Ensure name is never null for SQLite
-            const safeName = name || 'doc.pdf';
-            await addDocument(destFile.uri, safeName, 0);
+            const fileType = mimeType?.includes('epub') ? 'epub' : 'pdf';
+
+            await addDocument({
+                uri: destFile.uri,
+                name: name || 'document',
+                pageCount: 0,
+                fileSize: size,
+                fileType,
+            });
             loadDocuments();
         } catch (error) {
-            console.error('Error importing PDF:', error);
+            console.error('Error importing document:', error);
         }
     };
 
-    const openReader = (doc: Document) => {
+    const openReader = async (doc: Document) => {
+        await updateLastOpenedAt(doc.id);
         router.push({
-            pathname: '/reader',
-            params: { uri: doc.uri, name: doc.name, id: doc.id, lastReadPage: doc.lastReadPage }
-        });
+            pathname: '/reader' as const,
+            params: { uri: doc.uri, name: doc.name, id: doc.id.toString(), lastReadPage: doc.lastReadPage.toString() },
+        } as any);
     };
 
-    const renderItem = ({ item }: { item: Document }) => (
-        <TouchableOpacity style={styles.card} onPress={() => openReader(item)}>
-            <View style={styles.thumbnailPlaceholder}>
-                <Ionicons name="document-text-outline" size={32} color="#fff" />
-            </View>
-            <View style={styles.cardContent}>
-                <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
-                <Text style={styles.cardSubtitle}>Page {item.lastReadPage}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={24} color="#666" />
-        </TouchableOpacity>
+    const handleLongPress = (doc: Document) => {
+        setSelectedDocument(doc);
+        setShowDetailsSheet(true);
+    };
+
+    const handleRemoveDocument = async () => {
+        if (!selectedDocument) return;
+        try {
+            await deleteDocument(selectedDocument.id);
+            setShowDetailsSheet(false);
+            setSelectedDocument(null);
+            loadDocuments();
+        } catch (error) {
+            console.error('Error removing document:', error);
+        }
+    };
+
+    const getProgress = (doc: Document): number => {
+        if (!doc.pageCount || doc.pageCount === 0) return 0;
+        return Math.round((doc.lastReadPage / doc.pageCount) * 100);
+    };
+
+    const currentSortLabel = SORT_OPTIONS.find((o) => o.value === sortOption)?.label || 'Sort';
+
+    const renderGridItem = ({ item, index }: { item: Document; index: number }) => (
+        <View style={[styles.gridItem, { marginLeft: index % NUM_COLUMNS === 0 ? 0 : CARD_GAP }]}>
+            <DocumentCard
+                id={item.id}
+                name={item.name}
+                author={item.author}
+                progress={getProgress(item)}
+                fileType={item.fileType || 'pdf'}
+                onPress={() => openReader(item)}
+                onLongPress={() => handleLongPress(item)}
+            />
+        </View>
+    );
+
+    const renderListItem = ({ item }: { item: Document }) => (
+        <View style={styles.listItem}>
+            <DocumentRow
+                id={item.id}
+                name={item.name}
+                author={item.author}
+                progress={getProgress(item)}
+                fileType={item.fileType || 'pdf'}
+                pageCount={item.pageCount}
+                onPress={() => openReader(item)}
+                onLongPress={() => handleLongPress(item)}
+            />
+        </View>
     );
 
     return (
         <SafeAreaView style={styles.container}>
             <StatusBar style="light" />
+
+            {/* Header */}
             <View style={styles.header}>
-                <Text style={styles.headerTitle}>Library</Text>
-                <TouchableOpacity style={styles.addButton} onPress={importPdf}>
-                    <Ionicons name="add" size={24} color="#000" />
+                <View style={styles.headerLeft}>
+                    <View style={styles.logoContainer}>
+                        <Ionicons name="library" size={20} color="#4ECDC4" />
+                    </View>
+                    <Text style={styles.headerTitle}>Library</Text>
+                </View>
+                <View style={styles.headerRight}>
+                    <TouchableOpacity
+                        style={styles.iconButton}
+                        onPress={() => setShowSearch(!showSearch)}
+                    >
+                        <Ionicons name="search" size={22} color="#fff" />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.iconButton} onPress={importPdf}>
+                        <Ionicons name="add" size={24} color="#fff" />
+                    </TouchableOpacity>
+                </View>
+            </View>
+
+            {/* Search Bar */}
+            {showSearch && (
+                <View style={styles.searchContainer}>
+                    <SearchBar value={searchQuery} onChangeText={setSearchQuery} />
+                </View>
+            )}
+
+            {/* Control Strip */}
+            <View style={styles.controlStrip}>
+                <TouchableOpacity
+                    style={styles.sortChip}
+                    onPress={() => setShowSortSheet(true)}
+                >
+                    <Text style={styles.sortLabel}>Sort: {currentSortLabel}</Text>
+                    <Ionicons name="chevron-down" size={16} color="#B0B0B0" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.viewToggle}
+                    onPress={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+                >
+                    <Ionicons
+                        name={viewMode === 'grid' ? 'grid' : 'list'}
+                        size={20}
+                        color="#fff"
+                    />
                 </TouchableOpacity>
             </View>
 
-            <FlatList
-                data={documents}
-                keyExtractor={(item) => item.id.toString()}
-                renderItem={renderItem}
-                contentContainerStyle={styles.listContent}
-                ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>No PDFs found</Text>
-                        <Text style={styles.emptySubtext}>Tap + to add a document</Text>
-                    </View>
+            {/* Document List/Grid */}
+            {filteredDocuments.length === 0 ? (
+                <EmptyState onAddDocument={importPdf} />
+            ) : viewMode === 'grid' ? (
+                <FlatList
+                    key="grid"
+                    data={filteredDocuments}
+                    keyExtractor={(item) => item.id.toString()}
+                    renderItem={renderGridItem}
+                    numColumns={NUM_COLUMNS}
+                    contentContainerStyle={styles.gridContent}
+                    showsVerticalScrollIndicator={false}
+                />
+            ) : (
+                <FlatList
+                    key="list"
+                    data={filteredDocuments}
+                    keyExtractor={(item) => item.id.toString()}
+                    renderItem={renderListItem}
+                    contentContainerStyle={styles.listContent}
+                    showsVerticalScrollIndicator={false}
+                />
+            )}
+
+            {/* Sort Bottom Sheet */}
+            <SortBottomSheet
+                visible={showSortSheet}
+                currentSort={sortOption}
+                onSelect={setSortOption}
+                onClose={() => setShowSortSheet(false)}
+            />
+
+            {/* Document Details Sheet */}
+            <DocumentDetailsSheet
+                visible={showDetailsSheet}
+                document={
+                    selectedDocument
+                        ? {
+                            name: selectedDocument.name,
+                            author: selectedDocument.author,
+                            fileType: selectedDocument.fileType || 'pdf',
+                            fileSize: selectedDocument.fileSize,
+                            pageCount: selectedDocument.pageCount,
+                            lastReadPage: selectedDocument.lastReadPage,
+                            createdAt: selectedDocument.createdAt,
+                            lastOpenedAt: selectedDocument.lastOpenedAt,
+                        }
+                        : null
                 }
+                onClose={() => {
+                    setShowDetailsSheet(false);
+                    setSelectedDocument(null);
+                }}
+                onOpen={() => {
+                    setShowDetailsSheet(false);
+                    if (selectedDocument) openReader(selectedDocument);
+                }}
+                onRemove={handleRemoveDocument}
             />
         </SafeAreaView>
     );
@@ -112,77 +301,93 @@ export default function LibraryScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000',
+        backgroundColor: '#0a0a14',
     },
     header: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        padding: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#1a1a1a',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
     },
-    headerTitle: {
-        fontFamily: 'InstrumentSerif_400Regular',
-        fontSize: 32,
-        color: '#fff',
-    },
-    addButton: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: '#fff',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    listContent: {
-        padding: 20,
-    },
-    card: {
+    headerLeft: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#111',
-        borderRadius: 16,
-        padding: 16,
+    },
+    logoContainer: {
+        width: 36,
+        height: 36,
+        borderRadius: 8,
+        backgroundColor: 'rgba(78,205,196,0.15)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    headerTitle: {
+        fontFamily: 'Inter_600SemiBold',
+        fontSize: 20,
+        color: '#fff',
+    },
+    headerRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    iconButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    searchContainer: {
+        paddingHorizontal: 16,
         marginBottom: 12,
     },
-    thumbnailPlaceholder: {
-        width: 48,
-        height: 64,
-        backgroundColor: '#222',
-        borderRadius: 8,
-        justifyContent: 'center',
+    controlStrip: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        marginRight: 16,
+        paddingHorizontal: 16,
+        marginBottom: 16,
     },
-    cardContent: {
-        flex: 1,
+    sortChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        paddingVertical: 8,
+        paddingHorizontal: 14,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
     },
-    cardTitle: {
+    sortLabel: {
         fontFamily: 'Inter_500Medium',
-        fontSize: 16,
-        color: '#fff',
-        marginBottom: 4,
-    },
-    cardSubtitle: {
-        fontFamily: 'Inter_400Regular',
         fontSize: 14,
-        color: '#666',
+        color: '#B0B0B0',
+        marginRight: 6,
     },
-    emptyState: {
-        alignItems: 'center',
+    viewToggle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(255,255,255,0.08)',
         justifyContent: 'center',
-        paddingTop: 100,
+        alignItems: 'center',
     },
-    emptyText: {
-        fontFamily: 'Inter_600SemiBold',
-        fontSize: 18,
-        color: '#333',
-        marginBottom: 8,
+    gridContent: {
+        paddingHorizontal: HORIZONTAL_PADDING,
+        paddingBottom: 80,
     },
-    emptySubtext: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 14,
-        color: '#222',
+    gridItem: {
+        width: CARD_WIDTH,
+        marginBottom: CARD_GAP,
+    },
+    listContent: {
+        paddingHorizontal: 16,
+        paddingBottom: 80,
+    },
+    listItem: {
+        marginBottom: 12,
     },
 });
