@@ -181,7 +181,7 @@ const styles = StyleSheet.create({
         marginBottom: 6,
     },
     valueTitle: {
-        fontFamily: 'InstrumentSerif_400Regular',
+        fontFamily: 'Inter_600SemiBold',
         fontSize: 16,
         color: '#FFFFFF',
     },

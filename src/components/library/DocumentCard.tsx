@@ -77,8 +77,8 @@ const styles = StyleSheet.create({
         padding: 12,
     },
     title: {
-        fontFamily: 'InstrumentSerif_400Regular',
-        fontSize: 16,
+        fontFamily: 'Inter_600SemiBold',
+        fontSize: 15,
         color: '#FFFFFF',
         lineHeight: 20,
         marginBottom: 4,

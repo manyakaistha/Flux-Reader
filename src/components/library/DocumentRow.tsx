@@ -89,8 +89,8 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     title: {
-        fontFamily: 'InstrumentSerif_400Regular',
-        fontSize: 18,
+        fontFamily: 'Inter_600SemiBold',
+        fontSize: 17,
         color: '#FFFFFF',
         marginBottom: 2,
     },

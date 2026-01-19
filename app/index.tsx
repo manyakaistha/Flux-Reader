@@ -324,8 +324,8 @@ const styles = StyleSheet.create({
         marginRight: 12,
     },
     headerTitle: {
-        fontFamily: 'Inter_600SemiBold',
-        fontSize: 20,
+        fontFamily: 'InstrumentSerif_400Regular',
+        fontSize: 24,
         color: '#fff',
     },
     headerRight: {

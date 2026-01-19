@@ -49,8 +49,8 @@ const styles = StyleSheet.create({
         marginBottom: 32,
     },
     heading: {
-        fontFamily: 'InstrumentSerif_400Regular',
-        fontSize: 24,
+        fontFamily: 'Inter_700Bold',
+        fontSize: 22,
         color: '#FFFFFF',
         textAlign: 'center',
         marginBottom: 16,
