@@ -28,12 +28,12 @@ export const themes: Record<Exclude<ReaderTheme, 'auto'>, ThemeColors> = {
         highlightOpacity: 0.35,
     },
     dark: {
-        background: '#0a0a14', // Match Library background
-        surface: '#1a1a24',
+        background: '#121212',
+        surface: '#1E1E1E',
         primaryText: '#FFFFFF',
         secondaryText: '#B0B0B0',
-        accent: '#4ECDC4', // Match Library accent (teal)
-        divider: '#2a2a34',
+        accent: '#64B5F6',
+        divider: '#373737',
         highlight: '#FFF176',
         highlightOpacity: 0.25,
     },
@@ -49,9 +49,9 @@ export const themes: Record<Exclude<ReaderTheme, 'auto'>, ThemeColors> = {
     },
 };
 
-// Typography scale - matching Library design language
+// Typography scale
 export const typography = {
-    titleFont: 'Inter_600SemiBold', // Changed to Inter to match Library
+    titleFont: 'InstrumentSerif_500Medium',
     uiFont: 'Inter_400Regular',
     uiFontMedium: 'Inter_500Medium',
     uiFontBold: 'Inter_700Bold',
