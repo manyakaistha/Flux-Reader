@@ -8,6 +8,7 @@ interface RSVPHeaderProps {
     timeRemaining: string;
     onClose: () => void;
     onSettings: () => void;
+    onReExtract?: () => void;
 }
 
 // Design system colors
@@ -29,6 +30,7 @@ export function RSVPHeader({
     timeRemaining,
     onClose,
     onSettings,
+    onReExtract,
 }: RSVPHeaderProps) {
     const insets = useSafeAreaInsets();
 
@@ -51,15 +53,27 @@ export function RSVPHeader({
                 <Text style={styles.timeText}>{timeRemaining} left</Text>
             </View>
 
-            {/* Settings Button */}
-            <TouchableOpacity
-                style={styles.iconButton}
-                onPress={onSettings}
-                activeOpacity={0.7}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-                <Ionicons name="settings-outline" size={22} color={COLORS.textPrimary} />
-            </TouchableOpacity>
+            <View style={styles.rightButtons}>
+                {/* Re-extract Button (Failsafe) */}
+                <TouchableOpacity
+                    style={styles.iconButton}
+                    onPress={onReExtract}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                    <Ionicons name="refresh-outline" size={22} color={COLORS.textPrimary} />
+                </TouchableOpacity>
+
+                {/* Settings Button */}
+                <TouchableOpacity
+                    style={styles.iconButton}
+                    onPress={onSettings}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                    <Ionicons name="settings-outline" size={22} color={COLORS.textPrimary} />
+                </TouchableOpacity>
+            </View>
         </View>
     );
 }
@@ -100,6 +114,10 @@ const styles = StyleSheet.create({
         fontFamily: 'Inter_500Medium',
         fontSize: 14,
         color: COLORS.textSecondary,
+    },
+    rightButtons: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
 });
 

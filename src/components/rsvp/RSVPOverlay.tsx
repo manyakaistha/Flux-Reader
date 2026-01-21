@@ -74,6 +74,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
     const webViewRef = useRef<WebView>(null);
     const [extractionError, setExtractionError] = useState<string | null>(null);
     const [showSettings, setShowSettings] = useState(false);
+    const [retryCount, setRetryCount] = useState(0);
     const hasInitializedRef = useRef<boolean>(false);
 
     const store = useRSVPStore();
@@ -103,7 +104,10 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
         try {
             const data = JSON.parse(event.nativeEvent.data);
 
-            if (data.type === 'progress') {
+            if (data.type === 'debug') {
+                // Log debug messages from WebView
+                console.log('[WebView Debug]', data.message);
+            } else if (data.type === 'progress') {
                 store.setExtracting(true, (data.current / data.total) * 100);
             } else if (data.type === 'complete') {
                 // Process extracted text into tokens
@@ -140,6 +144,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
                 hasInitializedRef.current = true;
                 store.setExtracting(false);
             } else if (data.type === 'error') {
+                console.error('[WebView Error]', data.message);
                 store.setError(data.message);
                 setExtractionError(data.message);
             }
@@ -148,7 +153,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
             store.setError('Failed to process PDF');
             setExtractionError('Failed to process PDF');
         }
-    }, [docId, pdfUri, store, progress, startFromPage]);
+    }, [docId, pdfUri, store.setExtracting, store.initializeRSVP, store.setError, progress, startFromPage]);
 
     /**
      * Start text extraction when overlay becomes visible
@@ -167,45 +172,82 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
             const cachedTokens = await progress.loadCachedTokens();
 
             if (cachedTokens && cachedTokens.length > 0) {
-                let startPosition = 0;
+                const firstPage = cachedTokens[0].sourceRef?.pageNum || 1;
 
-                if (startFromPage !== undefined) {
-                    startPosition = findFirstTokenIndexForPage(cachedTokens, startFromPage);
+                // VALIDATION: If the cached tokens don't start at page 1 (or close to it), 
+                // and we didn't specifically ask for a later start page during extraction (which we don't anymore),
+                // then this is likely a partial cache from the old "sliding window" version.
+                // We should invalidate it.
+                if (firstPage > 5) { // Tolerance of 5 pages
+                    console.warn('[RSVPOverlay] Detected partial cache starting at page', firstPage, '- INVALIDATING');
+                    await progress.clearCache();
+                    // Fall through to extraction below
                 } else {
-                    startPosition = await progress.loadProgress() || 0;
-                }
+                    let startPosition = 0;
 
-                console.log('[RSVPOverlay] Initializing with cached tokens:', cachedTokens.length);
-                store.initializeRSVP(docId.toString(), cachedTokens, startPosition);
-                hasInitializedRef.current = true;
-                return;
+                    if (startFromPage !== undefined) {
+                        startPosition = findFirstTokenIndexForPage(cachedTokens, startFromPage);
+                    } else {
+                        startPosition = await progress.loadProgress() || 0;
+                    }
+
+                    console.log('[RSVPOverlay] Initializing with cached tokens:', cachedTokens.length, 'at position:', startPosition);
+                    console.log('[RSVPOverlay] Progress:', (startPosition / cachedTokens.length * 100).toFixed(1) + '%');
+                    store.initializeRSVP(docId.toString(), cachedTokens, startPosition);
+                    hasInitializedRef.current = true;
+                    return;
+                }
             }
 
             // No cache, need to extract
             store.setExtracting(true, 0);
 
             try {
-                // Read PDF file as base64
+                // Get file info to check size
+                const fileInfo = await FileSystem.getInfoAsync(pdfUri);
+
+                if (!fileInfo.exists) {
+                    throw new Error('PDF file not found');
+                }
+
+                const fileSizeMB = (fileInfo.size || 0) / (1024 * 1024);
+                console.log('[RSVPOverlay] PDF file size:', fileSizeMB.toFixed(2), 'MB');
+
+                // For files larger than 30MB, show a warning but still try
+                if (fileSizeMB > 30) {
+                    console.warn('[RSVPOverlay] Large file detected, extraction may be slow');
+                }
+
+                // Read as base64 - pdf.js cannot load file:// URLs due to CORS
+                console.log('[RSVPOverlay] Reading PDF as base64...');
                 const base64 = await FileSystem.readAsStringAsync(pdfUri, {
                     encoding: 'base64',
                 });
 
-                // Send to WebView for extraction
+                console.log('[RSVPOverlay] Sending to WebView for extraction...');
                 if (webViewRef.current) {
                     webViewRef.current.postMessage(JSON.stringify({
                         type: 'extract',
                         pdfBase64: base64,
                     }));
                 }
-            } catch (error) {
+            } catch (error: any) {
                 console.error('Failed to read PDF:', error);
-                store.setError('Failed to read PDF file');
-                setExtractionError('Failed to read PDF file');
+
+                // Check if it's an OOM error
+                const errorMessage = error?.message || String(error);
+                if (errorMessage.includes('OutOfMemory') || errorMessage.includes('allocate')) {
+                    store.setError('This PDF is too large to process. Try a smaller document.');
+                    setExtractionError('This PDF is too large to process. Try a smaller document.');
+                } else {
+                    store.setError('Failed to read PDF: ' + errorMessage);
+                    setExtractionError('Failed to read PDF: ' + errorMessage);
+                }
             }
         };
 
         extractText();
-    }, [visible, docId, pdfUri, startFromPage, progress, store]);
+    }, [visible, docId, pdfUri, startFromPage, progress, store.initializeRSVP, store.setExtracting, store.setError, retryCount]);
 
     /**
      * Handle close - save progress
@@ -234,6 +276,19 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
         setShowSettings(true);
     }, []);
 
+    /**
+     * Handle manual re-extraction (failsafe)
+     */
+    const handleReExtract = useCallback(async () => {
+        if (engine.isPlaying) {
+            engine.pause();
+        }
+        await progress.clearCache();
+        store.reset();
+        hasInitializedRef.current = false;
+        setRetryCount(c => c + 1);
+    }, [engine, progress, store]);
+
     // Calculate context only when paused to avoid heavy computation during playback
     const context = React.useMemo(() => {
         if (engine.isPlaying || tokens.length === 0) return { before: '', after: '' };
@@ -253,11 +308,16 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
                 {/* Hidden WebView for PDF extraction */}
                 <WebView
                     ref={webViewRef}
-                    source={{ html: PDF_WORKER_HTML }}
+                    source={{ html: PDF_WORKER_HTML, baseUrl: pdfUri }} // Set baseUrl to allow relative paths if needed
                     onMessage={handleWebViewMessage}
                     style={styles.hiddenWebView}
-                    javaScriptEnabled
+                    javaScriptEnabled={true}
+                    domStorageEnabled={true}
+                    allowFileAccess={true}
+                    allowUniversalAccessFromFileURLs={true}
+                    allowFileAccessFromFileURLs={true}
                     originWhitelist={['*']}
+                    mixedContentMode="always"
                 />
 
                 {/* Loading State */}
@@ -289,6 +349,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
                             timeRemaining={engine.timeRemaining}
                             onClose={handleClose}
                             onSettings={handleSettings}
+                            onReExtract={handleReExtract}
                         />
 
                         {/* Word Display Area */}

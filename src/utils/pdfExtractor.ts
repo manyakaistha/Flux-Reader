@@ -27,9 +27,41 @@ export const PDF_WORKER_HTML = `
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     
-    async function extractText(pdfData) {
+    async function extractText(pdfData, pdfUrl) {
       try {
-        const pdf = await pdfjsLib.getDocument({ data: atob(pdfData) }).promise;
+        // Send debug message
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'debug',
+          message: 'extractText called with pdfUrl: ' + (pdfUrl ? 'YES' : 'NO') + ', pdfData: ' + (pdfData ? 'YES (' + pdfData.length + ' chars)' : 'NO')
+        }));
+        
+        let loadingTask;
+        if (pdfData) {
+          // Prefer base64 data if available
+          console.log('Loading PDF from base64 data');
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'debug',
+            message: 'Loading from base64 data...'
+          }));
+          loadingTask = pdfjsLib.getDocument({ data: atob(pdfData) });
+        } else if (pdfUrl) {
+          // Fallback to URL (may not work for file:// due to CORS)
+          console.log('Loading PDF from URL:', pdfUrl);
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'debug',
+            message: 'Loading from URL: ' + pdfUrl
+          }));
+          loadingTask = pdfjsLib.getDocument(pdfUrl);
+        } else {
+          throw new Error('No PDF data or URL provided');
+        }
+        
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'debug',
+          message: 'Waiting for PDF to load...'
+        }));
+        
+        const pdf = await loadingTask.promise;
         const totalPages = pdf.numPages;
         const pages = {};
         
@@ -113,7 +145,7 @@ export const PDF_WORKER_HTML = `
     document.addEventListener('message', function(e) {
       const data = JSON.parse(e.data);
       if (data.type === 'extract') {
-        extractText(data.pdfBase64);
+        extractText(data.pdfBase64, data.pdfUrl);
       }
     });
     
@@ -121,7 +153,7 @@ export const PDF_WORKER_HTML = `
     window.addEventListener('message', function(e) {
       const data = JSON.parse(e.data);
       if (data.type === 'extract') {
-        extractText(data.pdfBase64);
+        extractText(data.pdfBase64, data.pdfUrl);
       }
     });
   </script>

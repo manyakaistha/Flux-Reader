@@ -142,7 +142,16 @@ export function useProgress(docId: number | null) {
         try {
             const cached = await getCachedTokens(docId);
             if (cached && cached.tokenStream) {
-                return JSON.parse(cached.tokenStream) as RSVPToken[];
+                const tokens = JSON.parse(cached.tokenStream) as RSVPToken[];
+
+                // Log page range for debugging
+                if (tokens.length > 0) {
+                    const firstPage = tokens[0]?.sourceRef?.pageNum;
+                    const lastPage = tokens[tokens.length - 1]?.sourceRef?.pageNum;
+                    console.log('[useProgress] Cached tokens page range:', firstPage, '-', lastPage, '(', tokens.length, 'tokens)');
+                }
+
+                return tokens;
             }
         } catch (error) {
             console.error('Failed to load cached tokens:', error);
@@ -161,12 +170,26 @@ export function useProgress(docId: number | null) {
         return null;
     }, [docId]);
 
+    /**
+     * Clear cached tokens to force re-extraction
+     */
+    const clearCache = useCallback(async () => {
+        if (!docId) return;
+        try {
+            await deleteCachedTokens(docId);
+            console.log('[useProgress] Token cache cleared');
+        } catch (error) {
+            console.error('Failed to clear token cache:', error);
+        }
+    }, [docId]);
+
     // Memoize return object to prevent unnecessary effect re-triggers in consumers
     return useMemo(() => ({
         saveProgress,
         loadProgress,
         cacheTokens,
         loadCachedTokens,
-    }), [saveProgress, loadProgress, cacheTokens, loadCachedTokens]);
+        clearCache,
+    }), [saveProgress, loadProgress, cacheTokens, loadCachedTokens, clearCache]);
 }
 

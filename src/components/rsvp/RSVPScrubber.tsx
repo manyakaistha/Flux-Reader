@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Animated,
     Dimensions,
@@ -36,6 +36,7 @@ const COLORS = {
 /**
  * RSVP Scrubber Component
  * Interactive progress bar with page markers
+ * Uses refs for callback values to avoid stale closures in PanResponder
  */
 export function RSVPScrubber({
     currentIndex,
@@ -46,83 +47,115 @@ export function RSVPScrubber({
 }: RSVPScrubberProps) {
     const [isDragging, setIsDragging] = useState(false);
     const [dragProgress, setDragProgress] = useState(0);
+    const [previewPage, setPreviewPage] = useState(currentPage);
+
+    // Use refs to store latest values - these are updated on every render
+    // so the PanResponder always has access to fresh values
+    const totalTokensRef = useRef(totalTokens);
+    const totalPagesRef = useRef(totalPages);
+    const onSeekRef = useRef(onSeek);
+    const dragProgressRef = useRef(0);
+    const lastHapticRef = useRef(0);
+
+    // Keep refs updated on every render
+    useEffect(() => {
+        totalTokensRef.current = totalTokens;
+        totalPagesRef.current = totalPages;
+        onSeekRef.current = onSeek;
+    });
+
+    // Animation values
     const handleScale = useRef(new Animated.Value(1)).current;
     const barHeight = useRef(new Animated.Value(6)).current;
-    const lastHapticIndex = useRef(0);
 
     // Current progress (0-1)
     const progress = totalTokens > 0 ? currentIndex / totalTokens : 0;
     const displayProgress = isDragging ? dragProgress : progress;
 
-    const panResponder = useRef(
-        PanResponder.create({
-            onStartShouldSetPanResponder: () => true,
-            onMoveShouldSetPanResponder: () => true,
+    // Debug log
+    console.log('[Scrubber] currentIndex:', currentIndex, 'totalTokens:', totalTokens, 'progress:', (progress * 100).toFixed(1) + '%', 'currentPage:', currentPage);
 
-            onPanResponderGrant: (evt) => {
-                setIsDragging(true);
+    // Calculate page from progress
+    const getPageFromProgress = useCallback((prog: number): number => {
+        return Math.max(1, Math.min(totalPagesRef.current, Math.ceil(prog * totalPagesRef.current)));
+    }, []);
 
-                // Animate handle and bar expansion
-                Animated.parallel([
-                    Animated.spring(handleScale, {
-                        toValue: 1.4,
-                        useNativeDriver: true,
-                    }),
-                    Animated.spring(barHeight, {
-                        toValue: 12,
-                        useNativeDriver: false,
-                    }),
-                ]).start();
+    // Create PanResponder with useMemo so it's recreated when needed
+    const panResponder = useMemo(() => PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
 
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        onPanResponderGrant: (evt) => {
+            setIsDragging(true);
 
-                // Calculate initial position
-                const x = evt.nativeEvent.locationX;
-                const newProgress = Math.max(0, Math.min(1, x / BAR_WIDTH));
-                setDragProgress(newProgress);
-            },
+            // Calculate initial position
+            const x = evt.nativeEvent.locationX;
+            const newProgress = Math.max(0, Math.min(1, x / BAR_WIDTH));
+            setDragProgress(newProgress);
+            dragProgressRef.current = newProgress;
+            setPreviewPage(getPageFromProgress(newProgress));
 
-            onPanResponderMove: (evt, gestureState) => {
-                const x = gestureState.moveX - BAR_HORIZONTAL_PADDING;
-                const newProgress = Math.max(0, Math.min(1, x / BAR_WIDTH));
-                setDragProgress(newProgress);
+            // Animate handle and bar expansion
+            Animated.parallel([
+                Animated.spring(handleScale, {
+                    toValue: 1.4,
+                    useNativeDriver: true,
+                }),
+                Animated.spring(barHeight, {
+                    toValue: 12,
+                    useNativeDriver: false,
+                }),
+            ]).start();
 
-                // Calculate word index for haptic feedback
-                const wordIndex = Math.floor(newProgress * totalTokens);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        },
 
-                // Haptic feedback every 10 words
-                if (Math.floor(wordIndex / 10) !== Math.floor(lastHapticIndex.current / 10)) {
-                    Haptics.selectionAsync();
-                    lastHapticIndex.current = wordIndex;
-                }
-            },
+        onPanResponderMove: (evt, gestureState) => {
+            const x = gestureState.moveX - BAR_HORIZONTAL_PADDING;
+            const newProgress = Math.max(0, Math.min(1, x / BAR_WIDTH));
+            setDragProgress(newProgress);
+            dragProgressRef.current = newProgress;
+            setPreviewPage(getPageFromProgress(newProgress));
 
-            onPanResponderRelease: () => {
-                setIsDragging(false);
+            // Calculate word index for haptic feedback
+            const wordIndex = Math.floor(newProgress * totalTokensRef.current);
 
-                // Animate handle and bar back
-                Animated.parallel([
-                    Animated.spring(handleScale, {
-                        toValue: 1,
-                        useNativeDriver: true,
-                    }),
-                    Animated.spring(barHeight, {
-                        toValue: 6,
-                        useNativeDriver: false,
-                    }),
-                ]).start();
+            // Haptic feedback every 10 words
+            if (Math.floor(wordIndex / 10) !== Math.floor(lastHapticRef.current / 10)) {
+                Haptics.selectionAsync();
+                lastHapticRef.current = wordIndex;
+            }
+        },
 
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        onPanResponderRelease: () => {
+            setIsDragging(false);
 
-                // Seek to position
-                const wordIndex = Math.floor(dragProgress * totalTokens);
-                onSeek(wordIndex);
-            },
-        })
-    ).current;
+            // Animate handle and bar back
+            Animated.parallel([
+                Animated.spring(handleScale, {
+                    toValue: 1,
+                    useNativeDriver: true,
+                }),
+                Animated.spring(barHeight, {
+                    toValue: 6,
+                    useNativeDriver: false,
+                }),
+            ]).start();
+
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+            // Seek to position using refs for fresh values
+            const wordIndex = Math.floor(dragProgressRef.current * totalTokensRef.current);
+            console.log('[Scrubber] Seeking to word index:', wordIndex, 'of', totalTokensRef.current);
+            onSeekRef.current(wordIndex);
+        },
+    }), [handleScale, barHeight, getPageFromProgress]);
 
     // Calculate handle position
     const handlePosition = displayProgress * BAR_WIDTH;
+
+    // Display page - use preview during drag
+    const displayPage = isDragging ? previewPage : currentPage;
 
     return (
         <View style={styles.container}>
@@ -152,9 +185,20 @@ export function RSVPScrubber({
 
             {/* Page Labels */}
             <View style={styles.pageLabels}>
-                <Text style={styles.pageText}>Page {currentPage}</Text>
+                <Text style={styles.pageText}>
+                    Page {displayPage}
+                </Text>
                 <Text style={styles.pageText}>of {totalPages}</Text>
             </View>
+
+            {/* Preview text during drag */}
+            {isDragging && (
+                <View style={styles.previewContainer}>
+                    <Text style={styles.previewText}>
+                        Jump to page {previewPage}
+                    </Text>
+                </View>
+            )}
         </View>
     );
 }
@@ -203,6 +247,22 @@ const styles = StyleSheet.create({
         fontFamily: 'Inter_500Medium',
         fontSize: 11,
         color: COLORS.textSecondary,
+    },
+    previewContainer: {
+        position: 'absolute',
+        top: -30,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+    },
+    previewText: {
+        fontFamily: 'Inter_500Medium',
+        fontSize: 12,
+        color: COLORS.accent,
+        backgroundColor: COLORS.surface,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
     },
 });
 
