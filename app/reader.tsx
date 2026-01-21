@@ -1,13 +1,13 @@
 import { ReaderFooter, ReaderTopBar } from '@/src/components/reader';
-import { updateLastOpenedAt, updateLastReadPage } from '@/src/database/db';
+import { RSVPOverlay } from '@/src/components/rsvp/RSVPOverlay';
+import { updateLastOpenedAt, updateLastReadPage, updatePageCount } from '@/src/database/db';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     Dimensions,
     StyleSheet,
-    TouchableWithoutFeedback,
-    View,
+    View
 } from 'react-native';
 import Pdf from 'react-native-pdf';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -32,6 +32,7 @@ export default function ReaderScreen() {
     const [totalPages, setTotalPages] = useState(0);
     const [chromeVisible, setChromeVisible] = useState(true);
     const [showRSVP, setShowRSVP] = useState(false);
+    const [rsvpStartPage, setRsvpStartPage] = useState<number | undefined>(undefined);
 
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -97,21 +98,26 @@ export default function ReaderScreen() {
         router.back();
     }, [docId, currentPage, router]);
 
-    // Handle RSVP button tap
+    // Handle RSVP button tap - resume from saved position
     const handleRSVPPress = useCallback(() => {
         setChromeVisible(false);
+        setRsvpStartPage(undefined); // No start page = resume from saved
         setShowRSVP(true);
-        // TODO: Open RSVP overlay in paused state
-        console.log('RSVP tap - open paused');
     }, []);
 
-    // Handle RSVP button long-press
+    // Handle RSVP button long-press - start from current visible page
     const handleRSVPLongPress = useCallback(() => {
         setChromeVisible(false);
+        setRsvpStartPage(currentPage); // Start from current page
         setShowRSVP(true);
-        // TODO: Open RSVP overlay and start playback immediately
-        console.log('RSVP long-press - start playback');
-    }, []);
+    }, [currentPage]);
+
+    // Handle RSVP overlay close
+    const handleRSVPClose = useCallback(() => {
+        setShowRSVP(false);
+        setRsvpStartPage(undefined);
+        showChrome();
+    }, [showChrome]);
 
     // Update lastOpenedAt on mount
     useEffect(() => {
@@ -135,31 +141,31 @@ export default function ReaderScreen() {
                 <StatusBar style="light" hidden={!chromeVisible} />
 
                 {/* PDF Content */}
-                <TouchableWithoutFeedback onPress={toggleChrome}>
-                    <View style={styles.pdfContainer}>
-                        <Pdf
-                            ref={pdfRef}
-                            source={source}
-                            page={initialPage}
-                            horizontal={false}
-                            enablePaging={false}
-                            onLoadComplete={(numberOfPages) => {
-                                setTotalPages(numberOfPages);
-                            }}
-                            onPageChanged={handlePageChanged}
-                            onError={(error) => {
-                                console.error('PDF Error:', error);
-                            }}
-                            style={styles.pdf}
-                            trustAllCerts={false}
-                            enableAnnotationRendering={false}
-                            fitPolicy={0} // Fit width
-                            minScale={1.0}
-                            maxScale={3.0}
-                            spacing={24}
-                        />
-                    </View>
-                </TouchableWithoutFeedback>
+                <View style={styles.pdfContainer}>
+                    <Pdf
+                        ref={pdfRef}
+                        source={source}
+                        page={initialPage}
+                        horizontal={false}
+                        enablePaging={false}
+                        onLoadComplete={(numberOfPages) => {
+                            setTotalPages(numberOfPages);
+                            updatePageCount(docId, numberOfPages).catch(console.error);
+                        }}
+                        onPageChanged={handlePageChanged}
+                        onPageSingleTap={toggleChrome}
+                        onError={(error) => {
+                            console.error('PDF Error:', error);
+                        }}
+                        style={styles.pdf}
+                        trustAllCerts={false}
+                        enableAnnotationRendering={false}
+                        fitPolicy={0}
+                        minScale={1.0}
+                        maxScale={3.0}
+                        spacing={24}
+                    />
+                </View>
 
                 {/* Top Bar */}
                 <ReaderTopBar
@@ -175,6 +181,15 @@ export default function ReaderScreen() {
                     currentPage={currentPage}
                     totalPages={totalPages}
                     visible={chromeVisible}
+                />
+
+                {/* RSVP Overlay */}
+                <RSVPOverlay
+                    visible={showRSVP}
+                    docId={docId}
+                    pdfUri={uri || ''}
+                    startFromPage={rsvpStartPage}
+                    onClose={handleRSVPClose}
                 />
             </View>
         </SafeAreaProvider>

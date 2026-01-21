@@ -222,6 +222,16 @@ export const updateLastReadPage = async (id: number, page: number): Promise<void
     }
 };
 
+export const updatePageCount = async (id: number, count: number): Promise<void> => {
+    const db = await getDb();
+    const statement = await db.prepareAsync('UPDATE documents SET pageCount = $count WHERE id = $id');
+    try {
+        await statement.executeAsync({ $count: count, $id: id });
+    } finally {
+        await statement.finalizeAsync();
+    }
+};
+
 export const deleteDocument = async (id: number): Promise<void> => {
     const db = await getDb();
     const statement = await db.prepareAsync('DELETE FROM documents WHERE id = $id');

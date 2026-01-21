@@ -1,48 +1,100 @@
 import React, { useMemo } from 'react';
 import { Dimensions, StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { RSVPToken } from '../../types';
-import { shouldApplyORP } from '../../utils/tokenizer';
 
 interface WordDisplayProps {
     token: RSVPToken | null;
+    contextBefore?: string;
+    contextAfter?: string;
+    isPaused: boolean;
     baseFontSize?: number;
     minimumFontSize?: number;
+    showORPGuide?: boolean;
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// Design system colors
+const COLORS = {
+    background: '#0a0a14',
+    orpLetter: '#FF6B6B',
+    textPrimary: '#FFFFFF',
+    textContext: '#6B7280',
+    guideLine: 'rgba(255, 107, 107, 0.2)',
+};
+
+/**
+ * Calculate ORP position - ignores trailing punctuation
+ */
+function calculateORPForDisplay(text: string): { orpIndex: number; leftPart: string; orpChar: string; rightPart: string } {
+    // Match pattern: leading punct, core word, trailing punct
+    const match = text.match(/^([.,;:!?—–\-"'`()\[\]{}…]*)(.+?)([.,;:!?—–\-"'`()\[\]{}…]*)$/);
+    if (!match) {
+        return { orpIndex: 0, leftPart: '', orpChar: text[0] || '', rightPart: text.slice(1) };
+    }
+
+    const [, leading, core, trailing] = match;
+
+    if (core.length <= 1) {
+        return {
+            orpIndex: leading.length,
+            leftPart: leading,
+            orpChar: core,
+            rightPart: trailing,
+        };
+    }
+
+    // ORP at 37% of core word
+    const coreORP = Math.floor(core.length * 0.37);
+    return {
+        orpIndex: leading.length + coreORP,
+        leftPart: leading + core.slice(0, coreORP),
+        orpChar: core[coreORP],
+        rightPart: core.slice(coreORP + 1) + trailing,
+    };
+}
+
+
+
 /**
  * RSVP Word Display Component
- * Displays a single word with ORP (Optimal Recognition Point) alignment
- * 
- * Layout: [Left Segment (45%)] | [ORP Marker] | [Right Segment (45%)]
- * The ORP character is highlighted in red and centered
+ * Displays word with fixed ORP position at screen center
+ * Shows context words when paused (8 before, 8 after)
  */
 export function WordDisplay({
     token,
+    contextBefore,
+    contextAfter,
+    isPaused,
     baseFontSize = 48,
-    minimumFontSize = 24
+    minimumFontSize = 28,
+    showORPGuide = false,
 }: WordDisplayProps) {
 
     // Calculate font size based on word length
     const fontSize = useMemo(() => {
         if (!token) return baseFontSize;
 
-        const maxWidth = SCREEN_WIDTH * 0.85;
-        // Approximate character width (varies by font, but good estimate)
-        const charWidth = baseFontSize * 0.6;
+        const maxWidth = SCREEN_WIDTH * 0.88;
+        const charWidth = baseFontSize * 0.55; // Adjusted for Instrument Serif
         const estimatedWordWidth = token.text.length * charWidth;
 
         if (estimatedWordWidth <= maxWidth) {
             return baseFontSize;
         }
 
-        // Calculate shrink factor
         const shrinkFactor = maxWidth / estimatedWordWidth;
-        const shrunkenSize = Math.floor(baseFontSize * shrinkFactor);
-
-        return Math.max(shrunkenSize, minimumFontSize);
+        return Math.max(Math.floor(baseFontSize * shrinkFactor), minimumFontSize);
     }, [token, baseFontSize, minimumFontSize]);
+
+    // Get ORP parts
+    const orpParts = useMemo(() => {
+        if (!token) return null;
+        return calculateORPForDisplay(token.text);
+    }, [token]);
+
+
 
     if (!token) {
         return (
@@ -52,103 +104,80 @@ export function WordDisplay({
         );
     }
 
-    // Check if we should apply ORP alignment
-    const useORP = shouldApplyORP(token);
-
-    if (!useORP) {
-        // Center-align punctuation and short words
-        return (
-            <View style={styles.container}>
-                <Text style={[styles.centeredText, { fontSize }]}>{token.text}</Text>
-            </View>
-        );
-    }
-
-    // ORP-aligned display
     return (
         <View style={styles.container}>
+            {/* ORP Guide Line (optional) */}
+            {showORPGuide && (
+                <View style={styles.guideLineContainer}>
+                    <View style={styles.guideLine} />
+                </View>
+            )}
+
+            {/* Context Words - Before (shown when paused) */}
+            {isPaused && contextBefore && (
+                <Animated.View
+                    entering={FadeIn.duration(200)}
+                    exiting={FadeOut.duration(150)}
+                    style={styles.contextBefore}
+                >
+                    <Text style={styles.contextText} numberOfLines={2}>
+                        {contextBefore}
+                    </Text>
+                </Animated.View>
+            )}
+
+            {/* Main Word Display - Fixed ORP Position */}
             <View style={styles.wordContainer}>
-                {/* Left segment - right-aligned */}
+                {/* Left segment - right-aligned to ORP center */}
                 <View style={styles.leftSegment}>
-                    <Text style={[styles.leftText, { fontSize }]} numberOfLines={1}>
-                        {token.leftPart}
+                    <Text
+                        style={[styles.wordText, { fontSize }]}
+                        numberOfLines={1}
+                    >
+                        {orpParts?.leftPart}
                     </Text>
                 </View>
 
-                {/* ORP character - centered, red */}
-                <View style={styles.orpMarker}>
+                {/* ORP character - fixed at center, RED */}
+                <View style={styles.orpCharContainer}>
                     <Text style={[styles.orpChar, { fontSize }]}>
-                        {token.orpChar}
+                        {orpParts?.orpChar}
                     </Text>
                 </View>
 
-                {/* Right segment - left-aligned */}
+                {/* Right segment - left-aligned from ORP center */}
                 <View style={styles.rightSegment}>
-                    <Text style={[styles.rightText, { fontSize }]} numberOfLines={1}>
-                        {token.rightPart}
+                    <Text
+                        style={[styles.wordText, { fontSize }]}
+                        numberOfLines={1}
+                    >
+                        {orpParts?.rightPart}
                     </Text>
                 </View>
             </View>
 
-            {/* ORP guide line */}
-            <View style={styles.guideLineContainer}>
-                <View style={styles.guideLine} />
-            </View>
+            {/* Context Words - After (shown when paused) */}
+            {isPaused && contextAfter && (
+                <Animated.View
+                    entering={FadeIn.duration(200).delay(50)}
+                    exiting={FadeOut.duration(150)}
+                    style={styles.contextAfter}
+                >
+                    <Text style={styles.contextText} numberOfLines={2}>
+                        {contextAfter}
+                    </Text>
+                </Animated.View>
+            )}
         </View>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
+        flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
         paddingHorizontal: 16,
-        minHeight: 100,
-    },
-    wordContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    leftSegment: {
-        flex: 0.45,
-        alignItems: 'flex-end',
-        paddingRight: 2,
-    },
-    leftText: {
-        fontFamily: 'Inter_500Medium',
-        color: '#fff',
-        textAlign: 'right',
-    },
-    orpMarker: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        minWidth: 20,
-    },
-    orpChar: {
-        fontFamily: 'Inter_600SemiBold',
-        color: '#ff4444',
-        fontWeight: 'bold',
-    },
-    rightSegment: {
-        flex: 0.45,
-        alignItems: 'flex-start',
-        paddingLeft: 2,
-    },
-    rightText: {
-        fontFamily: 'Inter_500Medium',
-        color: '#fff',
-        textAlign: 'left',
-    },
-    centeredText: {
-        fontFamily: 'Inter_500Medium',
-        color: '#fff',
-        textAlign: 'center',
-    },
-    placeholderText: {
-        fontFamily: 'Inter_400Regular',
-        color: '#666',
-        textAlign: 'center',
     },
     guideLineContainer: {
         position: 'absolute',
@@ -156,14 +185,63 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: '50%',
         width: 2,
+        marginLeft: -1,
+    },
+    guideLine: {
+        flex: 1,
+        width: 2,
+        backgroundColor: COLORS.guideLine,
+    },
+    wordContainer: {
+        flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
     },
-    guideLine: {
-        width: 2,
-        height: '100%',
-        backgroundColor: '#ff4444',
-        opacity: 0.3,
+    leftSegment: {
+        alignItems: 'flex-end',
+        paddingRight: 2,
+    },
+    rightSegment: {
+        alignItems: 'flex-start',
+        paddingLeft: 2,
+    },
+    wordText: {
+        fontFamily: 'EBGaramond_400Regular',
+        color: COLORS.textPrimary,
+    },
+    orpCharContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 4,
+    },
+    orpChar: {
+        fontFamily: 'EBGaramond_700Bold',
+        color: COLORS.orpLetter,
+    },
+    placeholderText: {
+        fontFamily: 'Inter_400Regular',
+        color: COLORS.textContext,
+    },
+    contextBefore: {
+        position: 'absolute',
+        top: '25%',
+        left: 24,
+        right: 24,
+        alignItems: 'center',
+    },
+    contextAfter: {
+        position: 'absolute',
+        bottom: '25%',
+        left: 24,
+        right: 24,
+        alignItems: 'center',
+    },
+    contextText: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 13,
+        color: COLORS.textContext,
+        textAlign: 'center',
+        lineHeight: 20,
     },
 });
 

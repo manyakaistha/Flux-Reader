@@ -21,13 +21,6 @@ export function ReaderFooter({
 
     const progress = totalPages > 0 ? Math.round((currentPage / totalPages) * 100) : 0;
 
-    // Estimate reading time (assuming ~2 min per page)
-    const pagesRemaining = totalPages - currentPage;
-    const minutesRemaining = Math.round(pagesRemaining * 2);
-    const timeText = minutesRemaining > 60
-        ? `~${Math.round(minutesRemaining / 60)} hr left`
-        : `~${minutesRemaining} min left`;
-
     return (
         <Animated.View
             entering={SlideInDown.duration(250)}
@@ -42,7 +35,7 @@ export function ReaderFooter({
 
             <View style={styles.content}>
                 <Text style={styles.progressText}>
-                    Page {currentPage} of {totalPages} • <Text style={styles.accent}>{progress}%</Text> • {timeText}
+                    Page {currentPage} of {totalPages} • <Text style={styles.accent}>{progress}%</Text>
                 </Text>
             </View>
         </Animated.View>

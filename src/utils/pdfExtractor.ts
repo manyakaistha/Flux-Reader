@@ -3,21 +3,19 @@ import { generateTokenStream } from './tokenizer';
 
 /**
  * Simple hash function for cache validation
- * Uses a basic string hash since we don't have crypto in RN
  */
 export function simpleHash(str: string): string {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        const char = str.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash; // Convert to 32-bit integer
-    }
-    return Math.abs(hash).toString(16);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16);
 }
 
 /**
  * HTML template for pdf.js text extraction in WebView
- * This will be loaded as a local HTML file
  */
 export const PDF_WORKER_HTML = `
 <!DOCTYPE html>
@@ -136,39 +134,33 @@ export const PDF_WORKER_HTML = `
 
 /**
  * Process extracted pages into token stream
- * @param extractedData - Data from WebView extraction
- * @param docId - Document identifier
- * @returns Array of RSVPTokens
  */
 export function processExtractedText(
-    extractedData: { totalPages: number; pages: { [key: number]: { text: string; lines: { lineIndex: number; text: string }[] } } },
-    docId: string
+  extractedData: { totalPages: number; pages: { [key: number]: { text: string; lines: { lineIndex: number; text: string }[] } } },
+  docId: string
 ): RSVPToken[] {
-    return generateTokenStream(extractedData.pages, docId);
+  return generateTokenStream(extractedData.pages, docId);
 }
 
 /**
  * Validate extracted text
- * @param tokens - Extracted tokens
- * @returns Validation result with error message if invalid
  */
 export function validateExtraction(tokens: RSVPToken[]): { valid: boolean; error?: string } {
-    if (!tokens || tokens.length === 0) {
-        return { valid: false, error: 'No text found in PDF. It may be a scanned document or image-only PDF.' };
-    }
+  if (!tokens || tokens.length === 0) {
+    return { valid: false, error: 'No text found in PDF. It may be a scanned document or image-only PDF.' };
+  }
 
-    // Check if we have at least some words (not just punctuation)
-    const wordCount = tokens.filter(t => t.type === 'word').length;
-    if (wordCount < 5) {
-        return { valid: false, error: 'Very little readable text found in this PDF.' };
-    }
+  const wordCount = tokens.filter(t => t.type === 'word').length;
+  if (wordCount < 5) {
+    return { valid: false, error: 'Very little readable text found in this PDF.' };
+  }
 
-    return { valid: true };
+  return { valid: true };
 }
 
 /**
- * Count words in token array (excluding punctuation)
+ * Count words in token array
  */
 export function countWords(tokens: RSVPToken[]): number {
-    return tokens.filter(t => t.type === 'word' || t.type === 'number').length;
+  return tokens.filter(t => t.type === 'word' || t.type === 'number').length;
 }

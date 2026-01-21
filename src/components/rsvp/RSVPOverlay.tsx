@@ -14,24 +14,67 @@ import { WebView } from 'react-native-webview';
 import { useProgress } from '../../hooks/useProgress';
 import { useRSVPEngine } from '../../hooks/useRSVPEngine';
 import { useRSVPStore } from '../../store/rsvpStore';
+import { RSVPToken } from '../../types';
 import { PDF_WORKER_HTML, processExtractedText, simpleHash, validateExtraction } from '../../utils/pdfExtractor';
 import { RSVPControls } from './RSVPControls';
+import { RSVPHeader } from './RSVPHeader';
+import { RSVPScrubber } from './RSVPScrubber';
 import { WordDisplay } from './WordDisplay';
+
+// Design system colors
+const COLORS = {
+    background: '#0a0a14',
+    accent: '#4ECDC4',
+    danger: '#FF6B6B',
+    textSecondary: '#B0B0B0',
+    surface: '#1a1a2e',
+};
 
 interface RSVPOverlayProps {
     visible: boolean;
     docId: number;
     pdfUri: string;
+    startFromPage?: number;
     onClose: () => void;
 }
 
+function findFirstTokenIndexForPage(tokens: any[], pageNum: number): number {
+    const index = tokens.findIndex(t => t.sourceRef?.pageNum === pageNum);
+    return index >= 0 ? index : 0;
+}
+
 /**
- * RSVP Overlay Component
- * Full-screen overlay for RSVP reading mode with text extraction
+ * Get context words (8 before and 8 after)
  */
-export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProps) {
+function getContextWords(tokens: RSVPToken[], currentIndex: number, count: number = 8): { before: string; after: string } {
+    const before: string[] = [];
+    const after: string[] = [];
+
+    // Get words before (filter out whitespace tokens)
+    for (let i = currentIndex - 1; i >= 0 && before.length < count; i--) {
+        if (tokens[i]?.type !== 'whitespace') {
+            before.unshift(tokens[i].text);
+        }
+    }
+
+    // Get words after
+    for (let i = currentIndex + 1; i < tokens.length && after.length < count; i++) {
+        if (tokens[i]?.type !== 'whitespace') {
+            after.push(tokens[i].text);
+        }
+    }
+
+    return {
+        before: before.join(' '),
+        after: after.join(' ')
+    };
+}
+
+export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: RSVPOverlayProps) {
     const webViewRef = useRef<WebView>(null);
     const [extractionError, setExtractionError] = useState<string | null>(null);
+    const [showSettings, setShowSettings] = useState(false);
+    const hasInitializedRef = useRef<boolean>(false);
 
     const store = useRSVPStore();
     const engine = useRSVPEngine();
@@ -42,14 +85,16 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
         extractionProgress,
         tokens,
         currentToken,
-        baseFontSize,
-        minimumFontSize,
+        currentTokenIndex,
+        currentPageNum,
+        totalTokens,
         targetWPM,
-        commaPauseMs,
-        periodPauseMs,
-        setCommaPauseMs,
-        setPeriodPauseMs,
     } = store;
+
+    // Calculate total pages (safe for large arrays)
+    const totalPages = tokens.length > 0
+        ? tokens.reduce((max, t) => Math.max(max, t.sourceRef?.pageNum || 1), 1)
+        : 1;
 
     /**
      * Handle messages from WebView (pdf.js extraction)
@@ -82,7 +127,17 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
                 const savedPosition = await progress.loadProgress();
 
                 // Initialize RSVP with tokens
-                store.initializeRSVP(docId.toString(), extractedTokens, savedPosition || 0);
+                let startPosition = 0;
+
+                if (startFromPage !== undefined) {
+                    startPosition = findFirstTokenIndexForPage(extractedTokens, startFromPage);
+                } else {
+                    startPosition = savedPosition || 0;
+                }
+
+                console.log('[RSVPOverlay] Initializing with extracted tokens:', extractedTokens.length);
+                store.initializeRSVP(docId.toString(), extractedTokens, startPosition);
+                hasInitializedRef.current = true;
                 store.setExtracting(false);
             } else if (data.type === 'error') {
                 store.setError(data.message);
@@ -93,7 +148,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
             store.setError('Failed to process PDF');
             setExtractionError('Failed to process PDF');
         }
-    }, [docId, pdfUri, store, progress]);
+    }, [docId, pdfUri, store, progress, startFromPage]);
 
     /**
      * Start text extraction when overlay becomes visible
@@ -101,14 +156,28 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
     useEffect(() => {
         if (!visible) return;
 
+        // Guard: Don't re-initialize if already loaded
+        if (hasInitializedRef.current) {
+            console.log('[RSVPOverlay] Skipping re-initialization - already loaded');
+            return;
+        }
+
         const extractText = async () => {
             // First, try to load cached tokens
             const cachedTokens = await progress.loadCachedTokens();
 
             if (cachedTokens && cachedTokens.length > 0) {
-                // Use cached tokens
-                const savedPosition = await progress.loadProgress();
-                store.initializeRSVP(docId.toString(), cachedTokens, savedPosition || 0);
+                let startPosition = 0;
+
+                if (startFromPage !== undefined) {
+                    startPosition = findFirstTokenIndexForPage(cachedTokens, startFromPage);
+                } else {
+                    startPosition = await progress.loadProgress() || 0;
+                }
+
+                console.log('[RSVPOverlay] Initializing with cached tokens:', cachedTokens.length);
+                store.initializeRSVP(docId.toString(), cachedTokens, startPosition);
+                hasInitializedRef.current = true;
                 return;
             }
 
@@ -136,7 +205,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
         };
 
         extractText();
-    }, [visible, docId, pdfUri]);
+    }, [visible, docId, pdfUri, startFromPage, progress, store]);
 
     /**
      * Handle close - save progress
@@ -147,23 +216,29 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
         }
         progress.saveProgress();
         store.reset();
+        hasInitializedRef.current = false; // Reset so next open can initialize
         onClose();
     }, [engine, progress, store, onClose]);
 
     /**
-     * Handle press on word display area (temporary playback)
+     * Handle seek from scrubber
      */
-    const handlePressIn = useCallback(() => {
-        if (!engine.isPlaying && tokens.length > 0) {
-            store.startTemporaryPlayback();
-        }
-    }, [engine.isPlaying, tokens.length, store]);
-
-    const handlePressOut = useCallback(() => {
-        if (store.state === 'PLAYING_TEMPORARY') {
-            store.stopTemporaryPlayback();
-        }
+    const handleSeek = useCallback((tokenIndex: number) => {
+        store.seekToToken(tokenIndex);
     }, [store]);
+
+    /**
+     * Handle settings button
+     */
+    const handleSettings = useCallback(() => {
+        setShowSettings(true);
+    }, []);
+
+    // Calculate context only when paused to avoid heavy computation during playback
+    const context = React.useMemo(() => {
+        if (engine.isPlaying || tokens.length === 0) return { before: '', after: '' };
+        return getContextWords(tokens, currentTokenIndex);
+    }, [engine.isPlaying, tokens, currentTokenIndex]);
 
     if (!visible) return null;
 
@@ -174,7 +249,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
             presentationStyle="fullScreen"
             onRequestClose={handleClose}
         >
-            <SafeAreaView style={styles.container}>
+            <SafeAreaView style={styles.container} edges={['left', 'right']}>
                 {/* Hidden WebView for PDF extraction */}
                 <WebView
                     ref={webViewRef}
@@ -188,7 +263,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
                 {/* Loading State */}
                 {isExtracting && (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#ff4444" />
+                        <ActivityIndicator size="large" color={COLORS.accent} />
                         <Text style={styles.loadingText}>
                             Extracting text... {Math.round(extractionProgress)}%
                         </Text>
@@ -205,39 +280,46 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
                     </View>
                 )}
 
-                {/* Word Display Area */}
+                {/* Main RSVP Content */}
                 {!isExtracting && !extractionError && tokens.length > 0 && (
-                    <Pressable
-                        style={styles.wordDisplayArea}
-                        onPressIn={handlePressIn}
-                        onPressOut={handlePressOut}
-                    >
-                        <WordDisplay
-                            token={currentToken}
-                            baseFontSize={baseFontSize}
-                            minimumFontSize={minimumFontSize}
+                    <>
+                        {/* Header */}
+                        <RSVPHeader
+                            progress={engine.progress}
+                            timeRemaining={engine.timeRemaining}
+                            onClose={handleClose}
+                            onSettings={handleSettings}
                         />
-                    </Pressable>
-                )}
 
-                {/* Controls */}
-                {!isExtracting && !extractionError && tokens.length > 0 && (
-                    <RSVPControls
-                        currentWPM={engine.currentWPM}
-                        targetWPM={targetWPM}
-                        progress={engine.progress}
-                        timeRemaining={engine.timeRemaining}
-                        isPlaying={engine.isPlaying}
-                        commaPauseMs={commaPauseMs}
-                        periodPauseMs={periodPauseMs}
-                        onPlayPause={engine.togglePlayback}
-                        onWPMChange={engine.setWPM}
-                        onCommaPauseChange={setCommaPauseMs}
-                        onPeriodPauseChange={setPeriodPauseMs}
-                        onSkipForward={() => engine.skipForward(10)}
-                        onSkipBackward={() => engine.skipBackward(10)}
-                        onClose={handleClose}
-                    />
+                        {/* Word Display Area */}
+                        <View style={styles.wordDisplayArea}>
+                            <WordDisplay
+                                token={currentToken}
+                                contextBefore={context.before}
+                                contextAfter={context.after}
+                                isPaused={!engine.isPlaying}
+                            />
+                        </View>
+
+                        {/* Scrubber */}
+                        <RSVPScrubber
+                            currentIndex={currentTokenIndex}
+                            totalTokens={totalTokens}
+                            currentPage={currentPageNum}
+                            totalPages={totalPages}
+                            onSeek={handleSeek}
+                        />
+
+                        {/* Controls */}
+                        <RSVPControls
+                            targetWPM={targetWPM}
+                            isPlaying={engine.isPlaying}
+                            onPlayPause={engine.togglePlayback}
+                            onWPMChange={engine.setWPM}
+                            onSkipForward={() => engine.skipForward(10)}
+                            onSkipBackward={() => engine.skipBackward(10)}
+                        />
+                    </>
                 )}
             </SafeAreaView>
         </Modal>
@@ -247,7 +329,7 @@ export function RSVPOverlay({ visible, docId, pdfUri, onClose }: RSVPOverlayProp
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000',
+        backgroundColor: COLORS.background,
     },
     hiddenWebView: {
         width: 0,
@@ -263,7 +345,7 @@ const styles = StyleSheet.create({
     loadingText: {
         fontFamily: 'Inter_400Regular',
         fontSize: 16,
-        color: '#888',
+        color: COLORS.textSecondary,
         marginTop: 16,
     },
     errorContainer: {
@@ -275,12 +357,12 @@ const styles = StyleSheet.create({
     errorText: {
         fontFamily: 'Inter_400Regular',
         fontSize: 16,
-        color: '#ff4444',
+        color: COLORS.danger,
         textAlign: 'center',
         marginBottom: 20,
     },
     retryButton: {
-        backgroundColor: '#333',
+        backgroundColor: COLORS.surface,
         paddingHorizontal: 24,
         paddingVertical: 12,
         borderRadius: 8,

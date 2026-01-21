@@ -178,7 +178,7 @@ export const useRSVPStore = create<RSVPStore>((set, get) => ({
     // === Speed Control ===
 
     setTargetWPM: (wpm: number) => {
-        const clampedWPM = Math.max(100, Math.min(1000, wpm));
+        const clampedWPM = Math.max(100, Math.min(2000, wpm));
         set({ targetWPM: clampedWPM });
     },
 

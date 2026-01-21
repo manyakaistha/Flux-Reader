@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     cacheExtractedTokens,
+    deleteCachedTokens,
     getCachedTokens,
     getReadingProgress,
     saveReadingProgress,
@@ -145,14 +146,27 @@ export function useProgress(docId: number | null) {
             }
         } catch (error) {
             console.error('Failed to load cached tokens:', error);
+
+            // If it's an OOM error, delete the corrupted cache
+            const errorMessage = String(error);
+            if (errorMessage.includes('OutOfMemory') || errorMessage.includes('allocate')) {
+                console.warn('Clearing corrupted token cache due to OOM error');
+                try {
+                    await deleteCachedTokens(docId);
+                } catch (deleteError) {
+                    console.error('Failed to delete cached tokens:', deleteError);
+                }
+            }
         }
         return null;
     }, [docId]);
 
-    return {
+    // Memoize return object to prevent unnecessary effect re-triggers in consumers
+    return useMemo(() => ({
         saveProgress,
         loadProgress,
         cacheTokens,
         loadCachedTokens,
-    };
+    }), [saveProgress, loadProgress, cacheTokens, loadCachedTokens]);
 }
+

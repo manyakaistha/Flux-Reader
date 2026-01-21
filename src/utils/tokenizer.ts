@@ -3,21 +3,25 @@ import { RSVPToken, SourceRef, TokenType } from '../types';
 /**
  * Classify a token text into a type
  */
+/**
+ * Classify a token text into a type
+ */
 export function classifyToken(text: string): TokenType {
-    // Check for punctuation only
-    if (/^[.,;:!?—–\-\"'`()\[\]{}…]+$/.test(text)) {
-        return 'punctuation';
-    }
-    // Check for numbers (including decimals and negatives)
-    if (/^-?\d+([.,]\d+)?$/.test(text)) {
-        return 'number';
-    }
     // Check for whitespace
     if (/^\s+$/.test(text)) {
         return 'whitespace';
     }
-    // Check for word (alphanumeric with optional apostrophe for contractions)
-    if (/^[\w''\-]+$/i.test(text)) {
+    // Check for punctuation only (no alphanumeric chars)
+    if (/^[.,;:!?—–\-\"'`()\[\]{}…]+$/.test(text)) {
+        return 'punctuation';
+    }
+    // Check for numbers (including decimals and negatives)
+    if (/^-?\d+([.,]\d+)?([.,;:!?—–\-\"'`()\[\]{}…]+)?$/.test(text)) {
+        return 'number';
+    }
+    // Check for word (contains at least one letter)
+    // Allows attached punctuation
+    if (/[a-zA-Z]/.test(text)) {
         return 'word';
     }
     return 'other';
@@ -27,9 +31,23 @@ export function classifyToken(text: string): TokenType {
  * Calculate Optimal Recognition Point (ORP) index
  * ORP is approximately 37% into the word for fastest recognition
  */
+/**
+ * Calculate Optimal Recognition Point (ORP) index
+ * ORP is approximately 35% into the word for fastest recognition
+ * Ignores leading/trailing punctuation for calculation
+ */
 export function calculateORPIndex(text: string): number {
-    if (text.length <= 1) return 0;
-    return Math.floor(text.length * 0.37);
+    // Strip leading/trailing punctuation to find core word
+    const match = text.match(/^([.,;:!?—–\-\"'`()\[\]{}…]*)(.*?)([.,;:!?—–\-\"'`()\[\]{}…]*)$/);
+    if (!match) return 0;
+
+    const [, leading, core, trailing] = match;
+
+    if (core.length <= 1) return leading.length;
+
+    // ORP is relative to the core word
+    const coreORP = Math.floor(core.length * 0.35);
+    return leading.length + coreORP;
 }
 
 /**
@@ -49,23 +67,22 @@ export function splitByORP(text: string): { orpIndex: number; orpChar: string; l
  * Tokenize text into displayable units
  * Uses Penn Treebank-style tokenization with modifications for RSVP
  */
+/**
+ * Tokenize text into displayable units
+ * Splits by whitespace only, keeping punctuation attached to words
+ */
 export function tokenizeText(text: string): { text: string; type: TokenType }[] {
     const tokens: { text: string; type: TokenType }[] = [];
 
-    // Pattern matches:
-    // - Words with optional contractions (don't, won't, etc.)
-    // - Numbers with optional decimals
-    // - Punctuation marks
-    // - URLs and emails (kept as single tokens)
-    const pattern = /(?:https?:\/\/[^\s]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|(\w+(?:[''][a-zA-Z]+)?)|([.,;:!?—–\-…]+)|([\"'`()\[\]{}]+)/g;
+    // Split by whitespace but keep the whitespace tokens if needed (regex capture group)
+    // \s+ matches one or more whitespace characters
+    const parts = text.split(/(\s+)/);
 
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-        const tokenText = match[0].trim();
-        if (tokenText) {
-            const type = classifyToken(tokenText);
-            tokens.push({ text: tokenText, type });
-        }
+    for (const part of parts) {
+        if (!part) continue;
+
+        const type = classifyToken(part);
+        tokens.push({ text: part, type });
     }
 
     return tokens;

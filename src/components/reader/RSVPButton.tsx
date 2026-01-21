@@ -18,10 +18,11 @@ interface RSVPButtonProps {
 
 export function RSVPButton({ onPress, onLongPress }: RSVPButtonProps) {
     const [isPressing, setIsPressing] = useState(false);
+    const [isGlowing, setIsGlowing] = useState(false);
     const scaleAnim = useRef(new Animated.Value(1)).current;
-    const glowAnim = useRef(new Animated.Value(0)).current;
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const warningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const longPressTriggered = useRef(false);
 
     const clearTimers = useCallback(() => {
         if (longPressTimer.current) {
@@ -36,6 +37,7 @@ export function RSVPButton({ onPress, onLongPress }: RSVPButtonProps) {
 
     const handlePressIn = useCallback(() => {
         setIsPressing(true);
+        longPressTriggered.current = false;
 
         // Scale down
         Animated.spring(scaleAnim, {
@@ -43,30 +45,18 @@ export function RSVPButton({ onPress, onLongPress }: RSVPButtonProps) {
             useNativeDriver: true,
         }).start();
 
-        // Start warning timer (300ms)
+        // Start warning timer (300ms) - show glow
         warningTimer.current = setTimeout(() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            // Start glow animation
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(glowAnim, {
-                        toValue: 1,
-                        duration: 300,
-                        useNativeDriver: false,
-                    }),
-                    Animated.timing(glowAnim, {
-                        toValue: 0.5,
-                        duration: 300,
-                        useNativeDriver: false,
-                    }),
-                ])
-            ).start();
+            setIsGlowing(true);
         }, LONG_PRESS_WARNING);
 
         // Start long press timer (500ms)
         longPressTimer.current = setTimeout(() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-            // Scale up briefly
+            longPressTriggered.current = true;
+
+            // Scale up briefly then reset
             Animated.sequence([
                 Animated.spring(scaleAnim, {
                     toValue: 1.1,
@@ -80,40 +70,30 @@ export function RSVPButton({ onPress, onLongPress }: RSVPButtonProps) {
 
             clearTimers();
             setIsPressing(false);
-            glowAnim.setValue(0);
+            setIsGlowing(false);
             onLongPress();
         }, LONG_PRESS_THRESHOLD);
-    }, [scaleAnim, glowAnim, clearTimers, onLongPress]);
+    }, [scaleAnim, clearTimers, onLongPress]);
 
     const handlePressOut = useCallback(() => {
         clearTimers();
         setIsPressing(false);
+        setIsGlowing(false);
 
-        // Reset animations
+        // Reset scale
         Animated.spring(scaleAnim, {
             toValue: 1,
             useNativeDriver: true,
         }).start();
-        glowAnim.setValue(0);
-    }, [scaleAnim, glowAnim, clearTimers]);
+    }, [scaleAnim, clearTimers]);
 
     const handlePress = useCallback(() => {
-        if (!isPressing) {
+        // Only trigger tap if long-press wasn't triggered
+        if (!longPressTriggered.current) {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onPress();
         }
-    }, [isPressing, onPress]);
-
-    const glowStyle = {
-        shadowOpacity: glowAnim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [0.3, 0.8],
-        }),
-        shadowRadius: glowAnim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [4, 16],
-        }),
-    };
+    }, [onPress]);
 
     return (
         <Pressable
@@ -125,7 +105,7 @@ export function RSVPButton({ onPress, onLongPress }: RSVPButtonProps) {
                 style={[
                     styles.button,
                     { transform: [{ scale: scaleAnim }] },
-                    glowStyle,
+                    isGlowing && styles.glowing,
                 ]}
             >
                 <Ionicons name="flash" size={16} color="#000" style={styles.icon} />
@@ -148,6 +128,11 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3,
         shadowRadius: 4,
         elevation: 4,
+    },
+    glowing: {
+        shadowOpacity: 0.8,
+        shadowRadius: 12,
+        elevation: 8,
     },
     icon: {
         marginRight: 6,
