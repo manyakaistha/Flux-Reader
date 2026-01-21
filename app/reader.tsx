@@ -187,6 +187,7 @@ export default function ReaderScreen() {
                 <RSVPOverlay
                     visible={showRSVP}
                     docId={docId}
+                    documentName={name || 'Document'}
                     pdfUri={uri || ''}
                     startFromPage={rsvpStartPage}
                     onClose={handleRSVPClose}

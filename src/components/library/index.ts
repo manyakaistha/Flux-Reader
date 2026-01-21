@@ -4,4 +4,5 @@ export { DocumentRow } from './DocumentRow';
 export { EmptyState } from './EmptyState';
 export { SearchBar } from './SearchBar';
 export { SORT_OPTIONS, SortBottomSheet } from './SortBottomSheet';
+export { ThumbnailGenerator } from './ThumbnailGenerator';
 

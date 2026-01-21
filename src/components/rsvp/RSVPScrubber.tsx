@@ -183,12 +183,11 @@ export function RSVPScrubber({
                 </Animated.View>
             </View>
 
-            {/* Page Labels */}
+            {/* Page Labels - Centered */}
             <View style={styles.pageLabels}>
                 <Text style={styles.pageText}>
-                    Page {displayPage}
+                    Page {displayPage} of {totalPages}
                 </Text>
-                <Text style={styles.pageText}>of {totalPages}</Text>
             </View>
 
             {/* Preview text during drag */}
@@ -240,13 +239,18 @@ const styles = StyleSheet.create({
     },
     pageLabels: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
         marginTop: 8,
     },
     pageText: {
         fontFamily: 'Inter_500Medium',
         fontSize: 11,
         color: COLORS.textSecondary,
+    },
+    progressText: {
+        fontFamily: 'Inter_700Bold',
+        fontSize: 12,
+        color: COLORS.accent,
     },
     previewContainer: {
         position: 'absolute',

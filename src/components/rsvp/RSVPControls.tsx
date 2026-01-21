@@ -1,10 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { getSetting, setSetting } from '../../database/db';
 
-// Speed presets as per spec
-const SPEED_PRESETS = [150, 200, 250, 300, 400, 500, 600, 800, 1000, 1200, 1500, 2000];
+// WPM step size
+const WPM_STEP = 50;
+const MIN_WPM = 100;
+const MAX_WPM = 1500;
+const WPM_SETTING_KEY = 'rsvp_target_wpm';
 
 interface RSVPControlsProps {
     targetWPM: number;
@@ -27,33 +31,9 @@ const COLORS = {
 };
 
 /**
- * Find next speed in presets
- */
-function getNextSpeed(currentWPM: number, direction: 'up' | 'down'): number {
-    const currentIndex = SPEED_PRESETS.findIndex(s => s >= currentWPM);
-
-    if (direction === 'up') {
-        // If already at max or beyond, stay at max
-        if (currentIndex === -1 || currentIndex >= SPEED_PRESETS.length - 1) {
-            return SPEED_PRESETS[SPEED_PRESETS.length - 1];
-        }
-        return SPEED_PRESETS[currentIndex + 1];
-    } else {
-        // If at first preset or below, stay at min
-        if (currentIndex <= 0) {
-            return SPEED_PRESETS[0];
-        }
-        // If between presets, go to lower one
-        if (SPEED_PRESETS[currentIndex] > currentWPM) {
-            return SPEED_PRESETS[currentIndex - 1];
-        }
-        return SPEED_PRESETS[Math.max(0, currentIndex - 1)];
-    }
-}
-
-/**
  * RSVP Controls Component
  * Play/pause, skip, and speed controls
+ * WPM is shown as a capsule above the play button
  */
 export function RSVPControls({
     targetWPM,
@@ -65,22 +45,56 @@ export function RSVPControls({
 }: RSVPControlsProps) {
     const longPressTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+    // Load saved WPM on mount
+    useEffect(() => {
+        const loadSavedWPM = async () => {
+            try {
+                const savedWPM = await getSetting(WPM_SETTING_KEY);
+                if (savedWPM) {
+                    const parsedWPM = parseInt(savedWPM, 10);
+                    if (!isNaN(parsedWPM) && parsedWPM >= MIN_WPM && parsedWPM <= MAX_WPM) {
+                        onWPMChange(parsedWPM);
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load saved WPM:', error);
+            }
+        };
+        loadSavedWPM();
+    }, []); // Only run on mount
+
+    // Save WPM when it changes
+    const saveWPM = useCallback(async (wpm: number) => {
+        try {
+            await setSetting(WPM_SETTING_KEY, wpm.toString());
+        } catch (error) {
+            console.error('Failed to save WPM:', error);
+        }
+    }, []);
+
     const handleSpeedUp = useCallback(() => {
+        const newWPM = Math.min(targetWPM + WPM_STEP, MAX_WPM);
         Haptics.selectionAsync();
-        onWPMChange(getNextSpeed(targetWPM, 'up'));
-    }, [targetWPM, onWPMChange]);
+        onWPMChange(newWPM);
+        saveWPM(newWPM);
+    }, [targetWPM, onWPMChange, saveWPM]);
 
     const handleSpeedDown = useCallback(() => {
+        const newWPM = Math.max(targetWPM - WPM_STEP, MIN_WPM);
         Haptics.selectionAsync();
-        onWPMChange(getNextSpeed(targetWPM, 'down'));
-    }, [targetWPM, onWPMChange]);
+        onWPMChange(newWPM);
+        saveWPM(newWPM);
+    }, [targetWPM, onWPMChange, saveWPM]);
 
     const handleSpeedLongPressIn = useCallback((direction: 'up' | 'down') => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         longPressTimer.current = setInterval(() => {
-            const handler = direction === 'up' ? handleSpeedUp : handleSpeedDown;
-            handler();
-        }, 150);
+            if (direction === 'up') {
+                handleSpeedUp();
+            } else {
+                handleSpeedDown();
+            }
+        }, 120);
     }, [handleSpeedUp, handleSpeedDown]);
 
     const handleSpeedLongPressOut = useCallback(() => {
@@ -107,74 +121,81 @@ export function RSVPControls({
 
     return (
         <View style={styles.container}>
-            {/* Left: Skip Back & Forward */}
-            <View style={styles.skipControls}>
+            {/* WPM Capsule - Above play button */}
+            <View style={styles.wpmCapsule}>
+                {/* Minus button */}
+                <TouchableOpacity
+                    style={styles.wpmButton}
+                    onPress={handleSpeedDown}
+                    onLongPress={() => handleSpeedLongPressIn('down')}
+                    onPressOut={handleSpeedLongPressOut}
+                    delayLongPress={300}
+                    activeOpacity={0.7}
+                    disabled={targetWPM <= MIN_WPM}
+                >
+                    <Ionicons
+                        name="remove"
+                        size={20}
+                        color={targetWPM <= MIN_WPM ? COLORS.textTertiary : COLORS.textPrimary}
+                    />
+                </TouchableOpacity>
+
+                {/* WPM Display */}
+                <View style={styles.wpmDisplay}>
+                    <Text style={styles.wpmValue}>{targetWPM}</Text>
+                    <Text style={styles.wpmLabel}>WPM</Text>
+                </View>
+
+                {/* Plus button */}
+                <TouchableOpacity
+                    style={styles.wpmButton}
+                    onPress={handleSpeedUp}
+                    onLongPress={() => handleSpeedLongPressIn('up')}
+                    onPressOut={handleSpeedLongPressOut}
+                    delayLongPress={300}
+                    activeOpacity={0.7}
+                    disabled={targetWPM >= MAX_WPM}
+                >
+                    <Ionicons
+                        name="add"
+                        size={20}
+                        color={targetWPM >= MAX_WPM ? COLORS.textTertiary : COLORS.textPrimary}
+                    />
+                </TouchableOpacity>
+            </View>
+
+            {/* Playback Controls Row */}
+            <View style={styles.playbackRow}>
+                {/* Skip Backward */}
                 <TouchableOpacity
                     style={styles.skipButton}
                     onPress={handleSkipBackward}
-                    onLongPress={() => onSkipBackward()} // Skip 50 words
-                    delayLongPress={500}
                     activeOpacity={0.7}
                 >
                     <Ionicons name="play-back" size={28} color={COLORS.textPrimary} />
                 </TouchableOpacity>
-            </View>
 
-            {/* Center: Play/Pause */}
-            <TouchableOpacity
-                style={styles.playButton}
-                onPress={handlePlayPause}
-                activeOpacity={0.8}
-            >
-                <Ionicons
-                    name={isPlaying ? 'pause' : 'play'}
-                    size={32}
-                    color={COLORS.background}
-                    style={isPlaying ? {} : { marginLeft: 4 }}
-                />
-            </TouchableOpacity>
+                {/* Play/Pause */}
+                <TouchableOpacity
+                    style={styles.playButton}
+                    onPress={handlePlayPause}
+                    activeOpacity={0.8}
+                >
+                    <Ionicons
+                        name={isPlaying ? 'pause' : 'play'}
+                        size={32}
+                        color={COLORS.background}
+                        style={isPlaying ? {} : { marginLeft: 4 }}
+                    />
+                </TouchableOpacity>
 
-            {/* Skip Forward */}
-            <View style={styles.skipControls}>
+                {/* Skip Forward */}
                 <TouchableOpacity
                     style={styles.skipButton}
                     onPress={handleSkipForward}
-                    onLongPress={() => onSkipForward()} // Skip 50 words
-                    delayLongPress={500}
                     activeOpacity={0.7}
                 >
                     <Ionicons name="play-forward" size={28} color={COLORS.textPrimary} />
-                </TouchableOpacity>
-            </View>
-
-            {/* Right: Speed Control */}
-            <View style={styles.speedContainer}>
-                {/* Increment */}
-                <TouchableOpacity
-                    style={styles.speedUpButton}
-                    onPress={handleSpeedUp}
-                    onPressIn={() => handleSpeedLongPressIn('up')}
-                    onPressOut={handleSpeedLongPressOut}
-                    activeOpacity={0.7}
-                >
-                    <Ionicons name="chevron-up" size={20} color={COLORS.textPrimary} />
-                </TouchableOpacity>
-
-                {/* WPM Display */}
-                <View style={styles.speedDisplay}>
-                    <Text style={styles.speedValue}>{targetWPM}</Text>
-                    <Text style={styles.speedLabel}>WPM</Text>
-                </View>
-
-                {/* Decrement */}
-                <TouchableOpacity
-                    style={styles.speedDownButton}
-                    onPress={handleSpeedDown}
-                    onPressIn={() => handleSpeedLongPressIn('down')}
-                    onPressOut={handleSpeedLongPressOut}
-                    activeOpacity={0.7}
-                >
-                    <Ionicons name="chevron-down" size={20} color={COLORS.textPrimary} />
                 </TouchableOpacity>
             </View>
         </View>
@@ -183,18 +204,52 @@ export function RSVPControls({
 
 const styles = StyleSheet.create({
     container: {
-        flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-around',
         paddingHorizontal: 16,
-        paddingVertical: 20,
+        paddingTop: 16,
+        paddingBottom: 32, // Extra padding to avoid home indicator
         backgroundColor: COLORS.background,
         borderTopWidth: 1,
         borderTopColor: 'rgba(255,255,255,0.1)',
     },
-    skipControls: {
+    wpmCapsule: {
         flexDirection: 'row',
         alignItems: 'center',
+        backgroundColor: COLORS.controlBg,
+        borderRadius: 24,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+        marginBottom: 16,
+        overflow: 'hidden',
+    },
+    wpmButton: {
+        width: 44,
+        height: 44,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    wpmDisplay: {
+        flexDirection: 'row',
+        alignItems: 'center', // Changed from baseline to center for vertical alignment
+        paddingHorizontal: 12,
+        gap: 6,
+    },
+    wpmValue: {
+        fontFamily: 'Inter_700Bold',
+        fontSize: 20,
+        color: COLORS.accent,
+    },
+    wpmLabel: {
+        fontFamily: 'Inter_500Medium',
+        fontSize: 11,
+        color: COLORS.textTertiary,
+        letterSpacing: 0.5,
+    },
+    playbackRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 24,
     },
     skipButton: {
         width: 56,
@@ -216,43 +271,6 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3,
         shadowRadius: 12,
         elevation: 8,
-    },
-    speedContainer: {
-        alignItems: 'center',
-        backgroundColor: COLORS.controlBg,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        overflow: 'hidden',
-    },
-    speedUpButton: {
-        width: 80,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: COLORS.controlBg,
-    },
-    speedDownButton: {
-        width: 80,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: COLORS.controlBg,
-    },
-    speedDisplay: {
-        alignItems: 'center',
-        paddingVertical: 4,
-    },
-    speedValue: {
-        fontFamily: 'Inter_700Bold',
-        fontSize: 24,
-        color: COLORS.accent,
-    },
-    speedLabel: {
-        fontFamily: 'Inter_500Medium',
-        fontSize: 10,
-        color: COLORS.textTertiary,
-        letterSpacing: 1,
     },
 });
 

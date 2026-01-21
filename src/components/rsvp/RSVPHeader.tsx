@@ -4,11 +4,8 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface RSVPHeaderProps {
-    progress: number; // 0-100
-    timeRemaining: string;
+    documentTitle: string;
     onClose: () => void;
-    onSettings: () => void;
-    onReExtract?: () => void;
 }
 
 // Design system colors
@@ -23,57 +20,35 @@ const COLORS = {
 
 /**
  * RSVP Header Component
- * Displays progress, time remaining, close and settings buttons
+ * Displays book title with back button
  */
 export function RSVPHeader({
-    progress,
-    timeRemaining,
+    documentTitle,
     onClose,
-    onSettings,
-    onReExtract,
 }: RSVPHeaderProps) {
     const insets = useSafeAreaInsets();
 
     return (
         <View style={[styles.container, { paddingTop: insets.top || 12 }]}>
-            {/* Close Button */}
+            {/* Back Button */}
             <TouchableOpacity
                 style={styles.iconButton}
                 onPress={onClose}
                 activeOpacity={0.7}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-                <Ionicons name="close" size={24} color={COLORS.textPrimary} />
+                <Ionicons name="chevron-back" size={24} color={COLORS.textPrimary} />
             </TouchableOpacity>
 
-            {/* Center: Progress & Time */}
+            {/* Center: Book Title */}
             <View style={styles.centerContent}>
-                <Text style={styles.progressText}>{Math.round(progress)}%</Text>
-                <Text style={styles.separator}> • </Text>
-                <Text style={styles.timeText}>{timeRemaining} left</Text>
+                <Text style={styles.titleText} numberOfLines={1}>
+                    {documentTitle}
+                </Text>
             </View>
 
-            <View style={styles.rightButtons}>
-                {/* Re-extract Button (Failsafe) */}
-                <TouchableOpacity
-                    style={styles.iconButton}
-                    onPress={onReExtract}
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                    <Ionicons name="refresh-outline" size={22} color={COLORS.textPrimary} />
-                </TouchableOpacity>
-
-                {/* Settings Button */}
-                <TouchableOpacity
-                    style={styles.iconButton}
-                    onPress={onSettings}
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                    <Ionicons name="settings-outline" size={22} color={COLORS.textPrimary} />
-                </TouchableOpacity>
-            </View>
+            {/* Right: Empty spacer for symmetry */}
+            <View style={styles.spacer} />
         </View>
     );
 }
@@ -97,27 +72,17 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     centerContent: {
-        flexDirection: 'row',
+        flex: 1,
         alignItems: 'center',
+        paddingHorizontal: 8,
     },
-    progressText: {
-        fontFamily: 'Inter_700Bold',
-        fontSize: 16,
-        color: COLORS.accent,
+    titleText: {
+        fontFamily: 'InstrumentSerif_400Regular',
+        fontSize: 18,
+        color: COLORS.textPrimary,
     },
-    separator: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 14,
-        color: COLORS.textTertiary,
-    },
-    timeText: {
-        fontFamily: 'Inter_500Medium',
-        fontSize: 14,
-        color: COLORS.textSecondary,
-    },
-    rightButtons: {
-        flexDirection: 'row',
-        alignItems: 'center',
+    spacer: {
+        width: 48,
     },
 });
 

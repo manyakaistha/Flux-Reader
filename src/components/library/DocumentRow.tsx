@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 interface DocumentRowProps {
     id: number;
@@ -10,6 +10,7 @@ interface DocumentRowProps {
     fileType: 'pdf' | 'epub';
     pageCount?: number;
     lastRead?: string;
+    thumbnailUri?: string;
     onPress: () => void;
     onLongPress?: () => void;
 }
@@ -21,6 +22,7 @@ export function DocumentRow({
     fileType,
     pageCount,
     lastRead,
+    thumbnailUri,
     onPress,
     onLongPress,
 }: DocumentRowProps) {
@@ -40,7 +42,15 @@ export function DocumentRow({
         >
             {/* Thumbnail */}
             <View style={styles.thumbnail}>
-                <Ionicons name="document-text" size={24} color="rgba(255,255,255,0.3)" />
+                {thumbnailUri ? (
+                    <Image
+                        source={{ uri: thumbnailUri }}
+                        style={styles.thumbnailImage}
+                        resizeMode="cover"
+                    />
+                ) : (
+                    <Ionicons name="document-text" size={24} color="rgba(255,255,255,0.3)" />
+                )}
             </View>
 
             {/* Content */}
@@ -84,6 +94,11 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginRight: 12,
+        overflow: 'hidden',
+    },
+    thumbnailImage: {
+        width: '100%',
+        height: '100%',
     },
     content: {
         flex: 1,

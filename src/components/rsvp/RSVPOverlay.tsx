@@ -33,6 +33,7 @@ const COLORS = {
 interface RSVPOverlayProps {
     visible: boolean;
     docId: number;
+    documentName: string;
     pdfUri: string;
     startFromPage?: number;
     onClose: () => void;
@@ -70,7 +71,7 @@ function getContextWords(tokens: RSVPToken[], currentIndex: number, count: numbe
     };
 }
 
-export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: RSVPOverlayProps) {
+export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPage, onClose }: RSVPOverlayProps) {
     const webViewRef = useRef<WebView>(null);
     const [extractionError, setExtractionError] = useState<string | null>(null);
     const [showSettings, setShowSettings] = useState(false);
@@ -345,11 +346,8 @@ export function RSVPOverlay({ visible, docId, pdfUri, startFromPage, onClose }: 
                     <>
                         {/* Header */}
                         <RSVPHeader
-                            progress={engine.progress}
-                            timeRemaining={engine.timeRemaining}
+                            documentTitle={documentName}
                             onClose={handleClose}
-                            onSettings={handleSettings}
-                            onReExtract={handleReExtract}
                         />
 
                         {/* Word Display Area */}
@@ -399,9 +397,10 @@ const styles = StyleSheet.create({
         opacity: 0,
     },
     loadingContainer: {
-        flex: 1,
+        ...StyleSheet.absoluteFillObject,
         justifyContent: 'center',
         alignItems: 'center',
+        backgroundColor: COLORS.background,
     },
     loadingText: {
         fontFamily: 'Inter_400Regular',

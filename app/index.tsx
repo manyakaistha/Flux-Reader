@@ -6,6 +6,7 @@ import {
     SearchBar,
     SORT_OPTIONS,
     SortBottomSheet,
+    ThumbnailGenerator,
 } from '@/src/components/library';
 import {
     addDocument,
@@ -47,6 +48,7 @@ export default function LibraryScreen() {
     const [showSortSheet, setShowSortSheet] = useState(false);
     const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
     const [showDetailsSheet, setShowDetailsSheet] = useState(false);
+    const [thumbnailQueue, setThumbnailQueue] = useState<Document[]>([]);
     const router = useRouter();
 
     const loadDocuments = useCallback(async () => {
@@ -71,6 +73,22 @@ export default function LibraryScreen() {
             loadDocuments();
         }, [loadDocuments])
     );
+
+    // Check for documents without thumbnails and queue them
+    useEffect(() => {
+        const docsNeedingThumbnails = documents.filter(
+            (doc) => !doc.thumbnailUri && doc.fileType === 'pdf'
+        );
+        if (docsNeedingThumbnails.length > 0 && thumbnailQueue.length === 0) {
+            setThumbnailQueue(docsNeedingThumbnails);
+        }
+    }, [documents]);
+
+    // Handle thumbnail generation complete
+    const handleThumbnailComplete = useCallback(() => {
+        setThumbnailQueue((prev) => prev.slice(1));
+        loadDocuments(); // Reload to get updated thumbnailUri
+    }, [loadDocuments]);
 
     // Filter documents by search query
     const filteredDocuments = useMemo(() => {
@@ -160,6 +178,7 @@ export default function LibraryScreen() {
                 author={item.author}
                 progress={getProgress(item)}
                 fileType={item.fileType || 'pdf'}
+                thumbnailUri={item.thumbnailUri}
                 onPress={() => openReader(item)}
                 onLongPress={() => handleLongPress(item)}
             />
@@ -175,6 +194,7 @@ export default function LibraryScreen() {
                 progress={getProgress(item)}
                 fileType={item.fileType || 'pdf'}
                 pageCount={item.pageCount}
+                thumbnailUri={item.thumbnailUri}
                 onPress={() => openReader(item)}
                 onLongPress={() => handleLongPress(item)}
             />
@@ -294,6 +314,16 @@ export default function LibraryScreen() {
                 }}
                 onRemove={handleRemoveDocument}
             />
+
+            {/* Thumbnail Generator - processes one document at a time */}
+            {thumbnailQueue.length > 0 && (
+                <ThumbnailGenerator
+                    key={thumbnailQueue[0].id}
+                    docId={thumbnailQueue[0].id}
+                    pdfUri={thumbnailQueue[0].uri}
+                    onComplete={handleThumbnailComplete}
+                />
+            )}
         </SafeAreaView>
     );
 }

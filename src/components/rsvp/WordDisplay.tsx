@@ -21,11 +21,12 @@ const COLORS = {
     orpLetter: '#FF6B6B',
     textPrimary: '#FFFFFF',
     textContext: '#6B7280',
-    guideLine: 'rgba(255, 107, 107, 0.2)',
+    guideLine: 'rgba(255, 107, 107, 0.3)',
 };
 
 /**
- * Calculate ORP position - ignores trailing punctuation
+ * Calculate ORP position - approximately 35-37% into the word
+ * Ignores leading/trailing punctuation for calculation
  */
 function calculateORPForDisplay(text: string): { orpIndex: number; leftPart: string; orpChar: string; rightPart: string } {
     // Match pattern: leading punct, core word, trailing punct
@@ -45,8 +46,8 @@ function calculateORPForDisplay(text: string): { orpIndex: number; leftPart: str
         };
     }
 
-    // ORP at 37% of core word
-    const coreORP = Math.floor(core.length * 0.37);
+    // ORP at ~35% of core word for optimal recognition
+    const coreORP = Math.floor(core.length * 0.35);
     return {
         orpIndex: leading.length + coreORP,
         leftPart: leading + core.slice(0, coreORP),
@@ -55,12 +56,13 @@ function calculateORPForDisplay(text: string): { orpIndex: number; leftPart: str
     };
 }
 
-
-
 /**
  * RSVP Word Display Component
- * Displays word with fixed ORP position at screen center
- * Shows context words when paused (8 before, 8 after)
+ * 
+ * Key feature: The ORP (Optimal Recognition Point) character is displayed
+ * at a FIXED position on screen. The word is positioned so that the ORP
+ * character is always at the center. This allows the eye to stay fixed
+ * while words flow through that point.
  */
 export function WordDisplay({
     token,
@@ -69,15 +71,15 @@ export function WordDisplay({
     isPaused,
     baseFontSize = 48,
     minimumFontSize = 28,
-    showORPGuide = false,
+    showORPGuide = false, // Guide line disabled by default
 }: WordDisplayProps) {
 
     // Calculate font size based on word length
     const fontSize = useMemo(() => {
         if (!token) return baseFontSize;
 
-        const maxWidth = SCREEN_WIDTH * 0.88;
-        const charWidth = baseFontSize * 0.55; // Adjusted for Instrument Serif
+        const maxWidth = SCREEN_WIDTH * 0.85;
+        const charWidth = baseFontSize * 0.55;
         const estimatedWordWidth = token.text.length * charWidth;
 
         if (estimatedWordWidth <= maxWidth) {
@@ -94,8 +96,6 @@ export function WordDisplay({
         return calculateORPForDisplay(token.text);
     }, [token]);
 
-
-
     if (!token) {
         return (
             <View style={styles.container}>
@@ -106,7 +106,7 @@ export function WordDisplay({
 
     return (
         <View style={styles.container}>
-            {/* ORP Guide Line (optional) */}
+            {/* ORP Guide Line - vertical line at center */}
             {showORPGuide && (
                 <View style={styles.guideLineContainer}>
                     <View style={styles.guideLine} />
@@ -127,8 +127,13 @@ export function WordDisplay({
             )}
 
             {/* Main Word Display - Fixed ORP Position */}
+            {/* 
+                The key to proper RSVP: ORP character is at a FIXED position.
+                We achieve this by giving leftSegment and rightSegment fixed widths
+                so the ORP character is always at the exact center of the screen.
+            */}
             <View style={styles.wordContainer}>
-                {/* Left segment - right-aligned to ORP center */}
+                {/* Left segment - right-aligned, fixed width to end at center */}
                 <View style={styles.leftSegment}>
                     <Text
                         style={[styles.wordText, { fontSize }]}
@@ -138,14 +143,14 @@ export function WordDisplay({
                     </Text>
                 </View>
 
-                {/* ORP character - fixed at center, RED */}
+                {/* ORP character - fixed at center, highlighted in red */}
                 <View style={styles.orpCharContainer}>
                     <Text style={[styles.orpChar, { fontSize }]}>
                         {orpParts?.orpChar}
                     </Text>
                 </View>
 
-                {/* Right segment - left-aligned from ORP center */}
+                {/* Right segment - left-aligned, fixed width to start at center */}
                 <View style={styles.rightSegment}>
                     <Text
                         style={[styles.wordText, { fontSize }]}
@@ -181,8 +186,8 @@ const styles = StyleSheet.create({
     },
     guideLineContainer: {
         position: 'absolute',
-        top: 0,
-        bottom: 0,
+        top: '30%',
+        bottom: '30%',
         left: '50%',
         width: 2,
         marginLeft: -1,
@@ -195,15 +200,21 @@ const styles = StyleSheet.create({
     wordContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
+        // No justifyContent: 'center' - we use fixed-width segments instead
     },
     leftSegment: {
+        // Right-align text so it ends at the ORP position
         alignItems: 'flex-end',
-        paddingRight: 2,
+        justifyContent: 'center',
+        // Fixed width = half screen minus padding, so ORP stays centered
+        width: SCREEN_WIDTH / 2 - 20,
     },
     rightSegment: {
+        // Left-align text so it starts at the ORP position
         alignItems: 'flex-start',
-        paddingLeft: 2,
+        justifyContent: 'center',
+        // Fixed width = half screen minus padding
+        width: SCREEN_WIDTH / 2 - 20,
     },
     wordText: {
         fontFamily: 'EBGaramond_400Regular',
@@ -212,7 +223,7 @@ const styles = StyleSheet.create({
     orpCharContainer: {
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: 4,
+        // ORP character positioned at exact center point
     },
     orpChar: {
         fontFamily: 'EBGaramond_700Bold',

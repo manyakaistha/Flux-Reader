@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 interface DocumentCardProps {
     id: number;
@@ -8,6 +8,7 @@ interface DocumentCardProps {
     author?: string;
     progress: number; // 0-100
     fileType: 'pdf' | 'epub';
+    thumbnailUri?: string;
     onPress: () => void;
     onLongPress?: () => void;
 }
@@ -17,6 +18,7 @@ export function DocumentCard({
     author,
     progress,
     fileType,
+    thumbnailUri,
     onPress,
     onLongPress,
 }: DocumentCardProps) {
@@ -28,9 +30,17 @@ export function DocumentCard({
             activeOpacity={0.7}
             delayLongPress={400}
         >
-            {/* Cover Image Placeholder */}
+            {/* Cover Image */}
             <View style={styles.cover}>
-                <Ionicons name="document-text" size={32} color="rgba(255,255,255,0.3)" />
+                {thumbnailUri ? (
+                    <Image
+                        source={{ uri: thumbnailUri }}
+                        style={styles.thumbnail}
+                        resizeMode="cover"
+                    />
+                ) : (
+                    <Ionicons name="document-text" size={32} color="rgba(255,255,255,0.3)" />
+                )}
             </View>
 
             {/* Info Section */}
@@ -72,6 +82,11 @@ const styles = StyleSheet.create({
         backgroundColor: '#1a2030',
         justifyContent: 'center',
         alignItems: 'center',
+        overflow: 'hidden',
+    },
+    thumbnail: {
+        width: '100%',
+        height: '100%',
     },
     info: {
         padding: 12,

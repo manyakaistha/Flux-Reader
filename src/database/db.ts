@@ -106,17 +106,29 @@ export const initDatabase = async (): Promise<void> => {
         );
     `);
 
-    // Extracted text cache table
+    // Extracted text cache metadata table (stores metadata, tokens are in token_chunks)
     await db.execAsync(`
         CREATE TABLE IF NOT EXISTS extracted_text_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             docId INTEGER NOT NULL UNIQUE,
-            tokenStream TEXT NOT NULL,
             totalTokens INTEGER,
             totalPages INTEGER,
             cacheDate INTEGER,
             fileHash TEXT,
             FOREIGN KEY (docId) REFERENCES documents(id) ON DELETE CASCADE
+        );
+    `);
+
+    // Token chunks table - stores tokens in smaller chunks to avoid OOM
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS token_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            docId INTEGER NOT NULL,
+            chunkIndex INTEGER NOT NULL,
+            tokens TEXT NOT NULL,
+            tokenCount INTEGER NOT NULL,
+            FOREIGN KEY (docId) REFERENCES documents(id) ON DELETE CASCADE,
+            UNIQUE(docId, chunkIndex)
         );
     `);
 
@@ -126,6 +138,17 @@ export const initDatabase = async (): Promise<void> => {
     `);
     await db.execAsync(`
         CREATE INDEX IF NOT EXISTS idx_cache_doc_id ON extracted_text_cache(docId);
+    `);
+    await db.execAsync(`
+        CREATE INDEX IF NOT EXISTS idx_token_chunks_doc_id ON token_chunks(docId);
+    `);
+
+    // Settings table for user preferences
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
     `);
 };
 
@@ -242,6 +265,16 @@ export const deleteDocument = async (id: number): Promise<void> => {
     }
 };
 
+export const updateThumbnailUri = async (id: number, thumbnailUri: string): Promise<void> => {
+    const db = await getDb();
+    const statement = await db.prepareAsync('UPDATE documents SET thumbnailUri = $thumbnailUri WHERE id = $id');
+    try {
+        await statement.executeAsync({ $thumbnailUri: thumbnailUri, $id: id });
+    } finally {
+        await statement.finalizeAsync();
+    }
+};
+
 // === Reading Progress Operations ===
 
 export const saveReadingProgress = async (
@@ -297,6 +330,9 @@ export const deleteReadingProgress = async (docId: number): Promise<void> => {
 
 // === Extracted Text Cache Operations ===
 
+// Chunk size for token storage (1000 tokens per chunk to avoid OOM)
+const TOKEN_CHUNK_SIZE = 1000;
+
 export const cacheExtractedTokens = async (
     docId: number,
     tokenStream: string,
@@ -305,46 +341,128 @@ export const cacheExtractedTokens = async (
     fileHash: string
 ): Promise<void> => {
     const db = await getDb();
-    const statement = await db.prepareAsync(`
-        INSERT INTO extracted_text_cache (docId, tokenStream, totalTokens, totalPages, cacheDate, fileHash)
-        VALUES ($docId, $tokens, $totalTokens, $totalPages, $cacheDate, $fileHash)
+
+    // Parse tokens from JSON string
+    const tokens = JSON.parse(tokenStream) as unknown[];
+
+    // Delete existing chunks for this docId
+    const deleteChunksStmt = await db.prepareAsync('DELETE FROM token_chunks WHERE docId = $docId');
+    try {
+        await deleteChunksStmt.executeAsync({ $docId: docId });
+    } finally {
+        await deleteChunksStmt.finalizeAsync();
+    }
+
+    // Insert tokens in chunks
+    const insertChunkStmt = await db.prepareAsync(`
+        INSERT INTO token_chunks (docId, chunkIndex, tokens, tokenCount)
+        VALUES ($docId, $chunkIndex, $tokens, $tokenCount)
+    `);
+
+    try {
+        for (let i = 0; i < tokens.length; i += TOKEN_CHUNK_SIZE) {
+            const chunk = tokens.slice(i, i + TOKEN_CHUNK_SIZE);
+            const chunkIndex = Math.floor(i / TOKEN_CHUNK_SIZE);
+            await insertChunkStmt.executeAsync({
+                $docId: docId,
+                $chunkIndex: chunkIndex,
+                $tokens: JSON.stringify(chunk),
+                $tokenCount: chunk.length,
+            });
+        }
+    } finally {
+        await insertChunkStmt.finalizeAsync();
+    }
+
+    // Save metadata (without the full tokenStream)
+    const metadataStmt = await db.prepareAsync(`
+        INSERT INTO extracted_text_cache (docId, totalTokens, totalPages, cacheDate, fileHash)
+        VALUES ($docId, $totalTokens, $totalPages, $cacheDate, $fileHash)
         ON CONFLICT(docId) DO UPDATE SET
-            tokenStream = $tokens,
             totalTokens = $totalTokens,
             totalPages = $totalPages,
             cacheDate = $cacheDate,
             fileHash = $fileHash
     `);
     try {
-        await statement.executeAsync({
+        await metadataStmt.executeAsync({
             $docId: docId,
-            $tokens: tokenStream,
             $totalTokens: totalTokens,
             $totalPages: totalPages,
             $cacheDate: Date.now(),
             $fileHash: fileHash,
         });
     } finally {
-        await statement.finalizeAsync();
+        await metadataStmt.finalizeAsync();
     }
 };
 
 export const getCachedTokens = async (docId: number): Promise<ExtractedTextCache | null> => {
     const db = await getDb();
-    const result = await db.getFirstAsync<ExtractedTextCache>(
+
+    // Get metadata
+    const metadata = await db.getFirstAsync<{
+        id: number;
+        docId: number;
+        totalTokens: number;
+        totalPages: number;
+        cacheDate: number;
+        fileHash: string;
+    }>(
         'SELECT * FROM extracted_text_cache WHERE docId = $docId',
         { $docId: docId }
     );
-    return result || null;
+
+    if (!metadata) return null;
+
+    // Load chunks incrementally and assemble
+    const chunks = await db.getAllAsync<{ chunkIndex: number; tokens: string }>(
+        'SELECT chunkIndex, tokens FROM token_chunks WHERE docId = $docId ORDER BY chunkIndex ASC',
+        { $docId: docId }
+    );
+
+    if (chunks.length === 0) {
+        // No chunks found - might be old data format, return null to trigger re-extraction
+        console.warn('[getCachedTokens] No token chunks found for docId:', docId);
+        return null;
+    }
+
+    // Assemble tokens from chunks
+    const allTokens: unknown[] = [];
+    for (const chunk of chunks) {
+        const chunkTokens = JSON.parse(chunk.tokens) as unknown[];
+        allTokens.push(...chunkTokens);
+    }
+
+    // Return in expected format with tokenStream for compatibility
+    return {
+        id: metadata.id,
+        docId: metadata.docId,
+        tokenStream: JSON.stringify(allTokens),
+        totalTokens: metadata.totalTokens,
+        totalPages: metadata.totalPages,
+        cacheDate: metadata.cacheDate,
+        fileHash: metadata.fileHash,
+    };
 };
 
 export const deleteCachedTokens = async (docId: number): Promise<void> => {
     const db = await getDb();
-    const statement = await db.prepareAsync('DELETE FROM extracted_text_cache WHERE docId = $docId');
+
+    // Delete chunks first
+    const deleteChunksStmt = await db.prepareAsync('DELETE FROM token_chunks WHERE docId = $docId');
     try {
-        await statement.executeAsync({ $docId: docId });
+        await deleteChunksStmt.executeAsync({ $docId: docId });
     } finally {
-        await statement.finalizeAsync();
+        await deleteChunksStmt.finalizeAsync();
+    }
+
+    // Delete metadata
+    const deleteMetadataStmt = await db.prepareAsync('DELETE FROM extracted_text_cache WHERE docId = $docId');
+    try {
+        await deleteMetadataStmt.executeAsync({ $docId: docId });
+    } finally {
+        await deleteMetadataStmt.finalizeAsync();
     }
 };
 
@@ -362,4 +480,29 @@ export const isCacheValid = async (docId: number, currentFileHash: string): Prom
     if (Date.now() - cached.cacheDate > thirtyDaysMs) return false;
 
     return true;
+};
+
+// === Settings Operations ===
+
+export const getSetting = async (key: string): Promise<string | null> => {
+    const db = await getDb();
+    const result = await db.getFirstAsync<{ value: string }>(
+        'SELECT value FROM settings WHERE key = $key',
+        { $key: key }
+    );
+    return result?.value || null;
+};
+
+export const setSetting = async (key: string, value: string): Promise<void> => {
+    const db = await getDb();
+    const statement = await db.prepareAsync(`
+        INSERT INTO settings (key, value)
+        VALUES ($key, $value)
+        ON CONFLICT(key) DO UPDATE SET value = $value
+    `);
+    try {
+        await statement.executeAsync({ $key: key, $value: value });
+    } finally {
+        await statement.finalizeAsync();
+    }
 };
