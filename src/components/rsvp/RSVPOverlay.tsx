@@ -77,6 +77,8 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
     const [showSettings, setShowSettings] = useState(false);
     const [retryCount, setRetryCount] = useState(0);
     const hasInitializedRef = useRef<boolean>(false);
+    const webViewReadyRef = useRef<boolean>(false);
+    const extractionInProgressRef = useRef<boolean>(false);
 
     const store = useRSVPStore();
     const engine = useRSVPEngine();
@@ -105,7 +107,10 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
         try {
             const data = JSON.parse(event.nativeEvent.data);
 
-            if (data.type === 'debug') {
+            if (data.type === 'ready') {
+                console.log('[WebView] WebView ready');
+                webViewReadyRef.current = true;
+            } else if (data.type === 'debug') {
                 // Log debug messages from WebView
                 console.log('[WebView Debug]', data.message);
             } else if (data.type === 'progress') {
@@ -143,9 +148,11 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
                 console.log('[RSVPOverlay] Initializing with extracted tokens:', extractedTokens.length);
                 store.initializeRSVP(docId.toString(), extractedTokens, startPosition);
                 hasInitializedRef.current = true;
+                extractionInProgressRef.current = false;
                 store.setExtracting(false);
             } else if (data.type === 'error') {
                 console.error('[WebView Error]', data.message);
+                extractionInProgressRef.current = false;
                 store.setError(data.message);
                 setExtractionError(data.message);
             }
@@ -201,6 +208,13 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
             }
 
             // No cache, need to extract
+            // Guard against multiple parallel extractions
+            if (extractionInProgressRef.current) {
+                console.log('[RSVPOverlay] Extraction already in progress, skipping');
+                return;
+            }
+            extractionInProgressRef.current = true;
+
             store.setExtracting(true, 0);
 
             try {
@@ -214,26 +228,67 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
                 const fileSizeMB = (fileInfo.size || 0) / (1024 * 1024);
                 console.log('[RSVPOverlay] PDF file size:', fileSizeMB.toFixed(2), 'MB');
 
-                // For files larger than 30MB, show a warning but still try
                 if (fileSizeMB > 30) {
                     console.warn('[RSVPOverlay] Large file detected, extraction may be slow');
                 }
 
-                // Read as base64 - pdf.js cannot load file:// URLs due to CORS
-                console.log('[RSVPOverlay] Reading PDF as base64...');
-                const base64 = await FileSystem.readAsStringAsync(pdfUri, {
-                    encoding: 'base64',
-                });
+                // Chunked reading to avoid OOM
+                // IMPORTANT: CHUNK_SIZE must be a multiple of 3 to ensure valid Base64 concatenation without padding issues
+                const CHUNK_SIZE = 524286; // approx 512KB, divisible by 3 (524288 - 2)
+                const totalChunks = Math.ceil((fileInfo.size || 0) / CHUNK_SIZE);
+                console.log(`[RSVPOverlay] Reading ${(fileInfo.size || 0)} bytes in ${totalChunks} chunks...`);
 
-                console.log('[RSVPOverlay] Sending to WebView for extraction...');
+                // Wait for WebView to be ready (with timeout)
+                let waitAttempts = 0;
+                while (!webViewReadyRef.current && waitAttempts < 50) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    waitAttempts++;
+                }
+                if (!webViewReadyRef.current) {
+                    throw new Error('WebView did not become ready in time');
+                }
+
                 if (webViewRef.current) {
+                    // Reset chunks in WebView
                     webViewRef.current.postMessage(JSON.stringify({
-                        type: 'extract',
-                        pdfBase64: base64,
+                        type: 'reset_chunks',
+                        total: totalChunks
                     }));
                 }
+
+                // Allow time for WebView to process reset
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+                // Read and send chunks sequentially
+                for (let i = 0; i < totalChunks; i++) {
+                    const position = i * CHUNK_SIZE;
+                    const length = Math.min(CHUNK_SIZE, (fileInfo.size || 0) - position);
+
+                    // Read chunk as base64
+                    const chunk = await FileSystem.readAsStringAsync(pdfUri, {
+                        encoding: 'base64',
+                        position: position,
+                        length: length
+                    });
+
+                    if (webViewRef.current) {
+                        webViewRef.current.postMessage(JSON.stringify({
+                            type: 'chunk',
+                            chunk: chunk,
+                            index: i,
+                            total: totalChunks
+                        }));
+                    }
+
+                    // Small delay to prevent bridge overload and allow GC
+                    if (i % 5 === 0) await new Promise(resolve => setTimeout(resolve, 20));
+                }
+
+                console.log('[RSVPOverlay] All chunks sent to WebView');
+                // No need to send 'extract' message with data, the WebView triggers it auto when all chunks received
             } catch (error: any) {
                 console.error('Failed to read PDF:', error);
+                extractionInProgressRef.current = false;
 
                 // Check if it's an OOM error
                 const errorMessage = error?.message || String(error);
@@ -436,6 +491,7 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        paddingBottom: 80, // Shift content up for better visual centering
     },
 });
 

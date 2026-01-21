@@ -27,6 +27,105 @@ export const PDF_WORKER_HTML = `
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     
+    let pdfChunks = [];
+    let receivedChunks = 0;
+    let expectedChunks = 0; // Track expected count separately from array length
+    let extractionId = 0;   // Track which extraction we're on to ignore stale chunks
+    
+    // Listen for messages from React Native
+    document.addEventListener('message', handleMessage);
+    window.addEventListener('message', handleMessage);
+    
+    // Signal that WebView is ready
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
+    
+    function handleMessage(event) {
+        try {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'reset_chunks') {
+                // Start a new extraction
+                extractionId++;
+                pdfChunks = new Array(data.total);
+                receivedChunks = 0;
+                expectedChunks = data.total;
+                window.ReactNativeWebView.postMessage(JSON.stringify({ 
+                    type: 'debug', 
+                    message: 'Reset chunks. Expecting ' + data.total + ' (extraction #' + extractionId + ')'
+                }));
+                
+            } else if (data.type === 'chunk') {
+                // Ignore chunks if we haven't received reset_chunks yet
+                if (expectedChunks === 0) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({ 
+                        type: 'debug', 
+                        message: 'Ignoring chunk - no reset received yet'
+                    }));
+                    return;
+                }
+                
+                // Ignore duplicate chunks for same index
+                if (pdfChunks[data.index]) {
+                    return;
+                }
+                
+                // Decode base64 to Uint8Array immediately to avoid huge strings
+                const binaryStr = atob(data.chunk);
+                const len = binaryStr.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                }
+                pdfChunks[data.index] = bytes;
+                receivedChunks++;
+                
+                // Progress logging every 10 chunks or at completion
+                if (receivedChunks % 10 === 0 || receivedChunks === expectedChunks) {
+                     window.ReactNativeWebView.postMessage(JSON.stringify({ 
+                         type: 'debug', 
+                         message: 'Received chunk ' + receivedChunks + '/' + expectedChunks 
+                     }));
+                }
+                
+                // Only reassemble when we have ALL expected chunks
+                if (receivedChunks === expectedChunks) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: 'All ' + expectedChunks + ' chunks received. Reassembling...' }));
+                    
+                    // Validate all chunks exist
+                    for (let i = 0; i < expectedChunks; i++) {
+                        if (!pdfChunks[i]) {
+                            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', message: 'Missing chunk at index ' + i }));
+                            return;
+                        }
+                    }
+                    
+                    // Calculate total size
+                    let totalLength = 0;
+                    for(let i=0; i<expectedChunks; i++) totalLength += pdfChunks[i].length;
+                    
+                    // Merge chunks into single Uint8Array
+                    const fullPdfData = new Uint8Array(totalLength);
+                    let offset = 0;
+                    for(let i=0; i<expectedChunks; i++) {
+                        fullPdfData.set(pdfChunks[i], offset);
+                        offset += pdfChunks[i].length;
+                    }
+                    
+                    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'debug', message: 'Assembled ' + totalLength + ' bytes. Starting extraction...' }));
+                    
+                    // Cleanup BEFORE extraction to prevent re-entry issues
+                    pdfChunks = []; 
+                    receivedChunks = 0;
+                    expectedChunks = 0;
+                    
+                    extractText(fullPdfData, null);
+                }
+            }
+        } catch (e) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', message: 'Error in chunk handler: ' + e.message }));
+        }
+    }
+
     async function extractText(pdfData, pdfUrl) {
       try {
         // Send debug message
@@ -38,12 +137,21 @@ export const PDF_WORKER_HTML = `
         let loadingTask;
         if (pdfData) {
           // Prefer base64 data if available
-          console.log('Loading PDF from base64 data');
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'debug',
-            message: 'Loading from base64 data...'
-          }));
-          loadingTask = pdfjsLib.getDocument({ data: atob(pdfData) });
+          if (pdfData instanceof Uint8Array) {
+               console.log('Loading PDF from Uint8Array data');
+               window.ReactNativeWebView.postMessage(JSON.stringify({
+                 type: 'debug',
+                 message: 'Loading from Uint8Array data (' + pdfData.length + ' bytes)...'
+               }));
+               loadingTask = pdfjsLib.getDocument({ data: pdfData });
+          } else {
+               console.log('Loading PDF from base64 string');
+               window.ReactNativeWebView.postMessage(JSON.stringify({
+                 type: 'debug',
+                 message: 'Loading from base64 string...'
+               }));
+               loadingTask = pdfjsLib.getDocument({ data: atob(pdfData) });
+          }
         } else if (pdfUrl) {
           // Fallback to URL (may not work for file:// due to CORS)
           console.log('Loading PDF from URL:', pdfUrl);

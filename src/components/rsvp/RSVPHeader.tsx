@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface RSVPHeaderProps {
@@ -8,19 +9,9 @@ interface RSVPHeaderProps {
     onClose: () => void;
 }
 
-// Design system colors
-const COLORS = {
-    background: '#0a0a14',
-    border: 'rgba(255,255,255,0.1)',
-    accent: '#4ECDC4',
-    textPrimary: '#FFFFFF',
-    textSecondary: '#B0B0B0',
-    textTertiary: '#808080',
-};
-
 /**
  * RSVP Header Component
- * Displays book title with back button
+ * Matches ReaderTopBar styling for coherence
  */
 export function RSVPHeader({
     documentTitle,
@@ -29,57 +20,65 @@ export function RSVPHeader({
     const insets = useSafeAreaInsets();
 
     return (
-        <View style={[styles.container, { paddingTop: insets.top || 12 }]}>
-            {/* Back Button */}
-            <TouchableOpacity
-                style={styles.iconButton}
-                onPress={onClose}
-                activeOpacity={0.7}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-                <Ionicons name="chevron-back" size={24} color={COLORS.textPrimary} />
-            </TouchableOpacity>
+        <View style={[styles.container, { paddingTop: insets.top }]}>
+            {Platform.OS === 'ios' ? (
+                <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+            ) : (
+                <View style={[StyleSheet.absoluteFill, styles.androidBackground]} />
+            )}
 
-            {/* Center: Book Title */}
-            <View style={styles.centerContent}>
-                <Text style={styles.titleText} numberOfLines={1}>
+            <View style={styles.content}>
+                {/* Back Button - same as ReaderTopBar */}
+                <TouchableOpacity
+                    style={styles.backButton}
+                    onPress={onClose}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                    <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                {/* Title */}
+                <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
                     {documentTitle}
                 </Text>
-            </View>
 
-            {/* Right: Empty spacer for symmetry */}
-            <View style={styles.spacer} />
+                {/* Right: Empty spacer for symmetry */}
+                <View style={styles.spacer} />
+            </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 100,
+    },
+    androidBackground: {
+        backgroundColor: 'rgba(10, 10, 20, 0.95)',
+    },
+    content: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 12,
-        paddingBottom: 12,
-        backgroundColor: COLORS.background,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        paddingHorizontal: 8,
+        paddingVertical: 8,
+        height: 56,
     },
-    iconButton: {
+    backButton: {
         width: 48,
         height: 48,
-        borderRadius: 24,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    centerContent: {
+    title: {
         flex: 1,
-        alignItems: 'center',
-        paddingHorizontal: 8,
-    },
-    titleText: {
         fontFamily: 'InstrumentSerif_400Regular',
         fontSize: 18,
-        color: COLORS.textPrimary,
+        color: '#FFFFFF',
+        marginHorizontal: 8,
     },
     spacer: {
         width: 48,

@@ -56,6 +56,15 @@ export const initDatabase = async (): Promise<void> => {
     // Execute PRAGMA and CREATE TABLE in separate statements for better compatibility
     await db.execAsync('PRAGMA journal_mode = WAL;');
 
+    // Migration: Drop old cache tables to fix schema (tokenStream NOT NULL issue)
+    // This is safe because cache data can be regenerated
+    try {
+        await db.execAsync('DROP TABLE IF EXISTS token_chunks');
+        await db.execAsync('DROP TABLE IF EXISTS extracted_text_cache');
+    } catch (e) {
+        console.log('Migration: tables already dropped or do not exist');
+    }
+
     // Documents table
     await db.execAsync(`
         CREATE TABLE IF NOT EXISTS documents (
@@ -345,6 +354,14 @@ export const cacheExtractedTokens = async (
     // Parse tokens from JSON string
     const tokens = JSON.parse(tokenStream) as unknown[];
 
+    // Delete existing metadata for this docId first
+    const deleteMetaStmt = await db.prepareAsync('DELETE FROM extracted_text_cache WHERE docId = $docId');
+    try {
+        await deleteMetaStmt.executeAsync({ $docId: docId });
+    } finally {
+        await deleteMetaStmt.finalizeAsync();
+    }
+
     // Delete existing chunks for this docId
     const deleteChunksStmt = await db.prepareAsync('DELETE FROM token_chunks WHERE docId = $docId');
     try {
@@ -353,9 +370,9 @@ export const cacheExtractedTokens = async (
         await deleteChunksStmt.finalizeAsync();
     }
 
-    // Insert tokens in chunks
+    // Insert tokens in chunks (INSERT OR REPLACE to handle potential race conditions)
     const insertChunkStmt = await db.prepareAsync(`
-        INSERT INTO token_chunks (docId, chunkIndex, tokens, tokenCount)
+        INSERT OR REPLACE INTO token_chunks (docId, chunkIndex, tokens, tokenCount)
         VALUES ($docId, $chunkIndex, $tokens, $tokenCount)
     `);
 
@@ -415,23 +432,45 @@ export const getCachedTokens = async (docId: number): Promise<ExtractedTextCache
 
     if (!metadata) return null;
 
-    // Load chunks incrementally and assemble
-    const chunks = await db.getAllAsync<{ chunkIndex: number; tokens: string }>(
-        'SELECT chunkIndex, tokens FROM token_chunks WHERE docId = $docId ORDER BY chunkIndex ASC',
+    // Load chunks incrementally to avoid OOM
+    // We avoid getAllAsync because it loads all raw rows (with JSON strings) into memory at once
+    const allTokens: any[] = [];
+
+    // Check how many chunks we have
+    const countResult = await db.getFirstAsync<{ count: number }>(
+        'SELECT COUNT(*) as count FROM token_chunks WHERE docId = $docId',
         { $docId: docId }
     );
+    const chunkCount = countResult?.count || 0;
 
-    if (chunks.length === 0) {
-        // No chunks found - might be old data format, return null to trigger re-extraction
+    if (chunkCount === 0) {
         console.warn('[getCachedTokens] No token chunks found for docId:', docId);
         return null;
     }
 
-    // Assemble tokens from chunks
-    const allTokens: unknown[] = [];
-    for (const chunk of chunks) {
-        const chunkTokens = JSON.parse(chunk.tokens) as unknown[];
-        allTokens.push(...chunkTokens);
+    const selectChunkStmt = await db.prepareAsync(
+        'SELECT tokens FROM token_chunks WHERE docId = $docId AND chunkIndex = $index'
+    );
+
+    try {
+        for (let i = 0; i < chunkCount; i++) {
+            const chunkResult = await selectChunkStmt.executeAsync<{ tokens: string }>({
+                $docId: docId,
+                $index: i
+            });
+            const row = await chunkResult.getFirstAsync();
+
+            if (row) {
+                const chunkTokens = JSON.parse(row.tokens);
+                // Push items individually to avoid creating another large intermediate array with concat
+                for (let j = 0; j < chunkTokens.length; j++) {
+                    allTokens.push(chunkTokens[j]);
+                }
+            }
+            await chunkResult.resetAsync();
+        }
+    } finally {
+        await selectChunkStmt.finalizeAsync();
     }
 
     // Return in expected format with tokenStream for compatibility
