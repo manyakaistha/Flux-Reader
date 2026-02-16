@@ -142,7 +142,7 @@ export default function LibraryScreen() {
         await updateLastOpenedAt(doc.id);
         router.push({
             pathname: '/reader' as const,
-            params: { uri: doc.uri, name: doc.name, id: doc.id.toString(), lastReadPage: doc.lastReadPage.toString() },
+            params: { uri: doc.uri, name: doc.name, id: doc.id.toString(), lastReadPage: doc.lastReadPage.toString(), fileType: doc.fileType },
         } as any);
     };
 
@@ -321,6 +321,7 @@ export default function LibraryScreen() {
                     key={thumbnailQueue[0].id}
                     docId={thumbnailQueue[0].id}
                     pdfUri={thumbnailQueue[0].uri}
+                    fileType={thumbnailQueue[0].fileType}
                     onComplete={handleThumbnailComplete}
                 />
             )}

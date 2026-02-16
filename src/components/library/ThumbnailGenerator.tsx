@@ -4,11 +4,12 @@ import { StyleSheet, View } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 
 import { updateThumbnailUri } from '@/src/database/db';
-import { generateThumbnailFilename, THUMBNAIL_GENERATOR_HTML } from '@/src/utils/thumbnailGenerator';
+import { EPUB_THUMBNAIL_GENERATOR_HTML, generateThumbnailFilename, THUMBNAIL_GENERATOR_HTML } from '@/src/utils/thumbnailGenerator';
 
 interface ThumbnailGeneratorProps {
     docId: number;
     pdfUri: string;
+    fileType: 'pdf' | 'epub';
     onComplete: (thumbnailUri: string | null) => void;
     onError?: (error: string) => void;
 }
@@ -20,6 +21,7 @@ interface ThumbnailGeneratorProps {
 export function ThumbnailGenerator({
     docId,
     pdfUri,
+    fileType,
     onComplete,
     onError,
 }: ThumbnailGeneratorProps) {
@@ -56,7 +58,8 @@ export function ThumbnailGenerator({
             webViewRef.current.postMessage(
                 JSON.stringify({
                     type: 'generate',
-                    pdfBase64: pdfBase64,
+                    pdfBase64: fileType === 'pdf' ? pdfBase64 : undefined,
+                    epubBase64: fileType === 'epub' ? pdfBase64 : undefined,
                     targetWidth: 300, // Slightly larger for better quality
                 })
             );
@@ -104,7 +107,7 @@ export function ThumbnailGenerator({
         <View style={styles.container}>
             <WebView
                 ref={webViewRef}
-                source={{ html: THUMBNAIL_GENERATOR_HTML }}
+                source={{ html: fileType === 'epub' ? EPUB_THUMBNAIL_GENERATOR_HTML : THUMBNAIL_GENERATOR_HTML }}
                 style={styles.webview}
                 onLoad={handleLoad}
                 onMessage={handleMessage}

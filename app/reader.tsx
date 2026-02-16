@@ -1,10 +1,12 @@
 import { ReaderFooter, ReaderTopBar } from '@/src/components/reader';
+import { EpubReader } from '@/src/components/reader/EpubReader';
 import { RSVPOverlay } from '@/src/components/rsvp/RSVPOverlay';
-import { updateLastOpenedAt, updateLastReadPage, updatePageCount } from '@/src/database/db';
+import { getDocument, updateLastOpenedAt, updateLastReadPage, updatePageCount } from '@/src/database/db';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
     Dimensions,
     StyleSheet,
     View
@@ -22,9 +24,15 @@ export default function ReaderScreen() {
         name: string;
         id: string;
         lastReadPage: string;
+        fileType?: 'pdf' | 'epub';
     }>();
 
     const { uri, name, id, lastReadPage: lastReadPageParam } = params;
+
+    // State to hold fileType if we need to fetch it
+    const [fileType, setFileType] = useState<'pdf' | 'epub'>(params.fileType || 'pdf');
+    const [isLoading, setIsLoading] = useState(!params.fileType); // Loading if we need to fetch info
+
     const docId = parseInt(id || '0', 10);
     const initialPage = parseInt(lastReadPageParam || '1', 10);
 
@@ -37,6 +45,20 @@ export default function ReaderScreen() {
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pdfRef = useRef<any>(null);
+
+    // Fetch fileType if missed
+    useEffect(() => {
+        if (!params.fileType && docId) {
+            getDocument(docId).then(doc => {
+                if (doc) {
+                    setFileType(doc.fileType);
+                }
+                setIsLoading(false);
+            });
+        } else {
+            setIsLoading(false);
+        }
+    }, [docId, params.fileType]);
 
     // Auto-hide chrome after delay
     const resetHideTimer = useCallback(() => {
@@ -135,36 +157,61 @@ export default function ReaderScreen() {
 
     const source = { uri: uri, cache: true };
 
+    if (isLoading) {
+        return (
+            <SafeAreaProvider>
+                <View style={[styles.container, styles.center]}>
+                    <ActivityIndicator size="large" color="#4ECDC4" />
+                </View>
+            </SafeAreaProvider>
+        );
+    }
+
     return (
         <SafeAreaProvider>
             <View style={styles.container}>
                 <StatusBar style="light" hidden={!chromeVisible} />
 
-                {/* PDF Content */}
+                {/* Content */}
                 <View style={styles.pdfContainer}>
-                    <Pdf
-                        ref={pdfRef}
-                        source={source}
-                        page={initialPage}
-                        horizontal={false}
-                        enablePaging={false}
-                        onLoadComplete={(numberOfPages) => {
-                            setTotalPages(numberOfPages);
-                            updatePageCount(docId, numberOfPages).catch(console.error);
-                        }}
-                        onPageChanged={handlePageChanged}
-                        onPageSingleTap={toggleChrome}
-                        onError={(error) => {
-                            console.error('PDF Error:', error);
-                        }}
-                        style={styles.pdf}
-                        trustAllCerts={false}
-                        enableAnnotationRendering={false}
-                        fitPolicy={0}
-                        minScale={1.0}
-                        maxScale={3.0}
-                        spacing={24}
-                    />
+                    {fileType === 'epub' ? (
+                        <EpubReader
+                            uri={uri}
+                            initialPage={initialPage}
+                            onPress={toggleChrome}
+                            onLoadComplete={(numberOfPages) => {
+                                setTotalPages(numberOfPages);
+                                updatePageCount(docId, numberOfPages).catch(console.error);
+                            }}
+                            onPageChanged={(page, percentage) => {
+                                handlePageChanged(page);
+                            }}
+                        />
+                    ) : (
+                        <Pdf
+                            ref={pdfRef}
+                            source={source}
+                            page={initialPage}
+                            horizontal={false}
+                            enablePaging={false}
+                            onLoadComplete={(numberOfPages) => {
+                                setTotalPages(numberOfPages);
+                                updatePageCount(docId, numberOfPages).catch(console.error);
+                            }}
+                            onPageChanged={handlePageChanged}
+                            onPageSingleTap={toggleChrome}
+                            onError={(error) => {
+                                console.error('PDF Error:', error);
+                            }}
+                            style={styles.pdf}
+                            trustAllCerts={false}
+                            enableAnnotationRendering={false}
+                            fitPolicy={0}
+                            minScale={1.0}
+                            maxScale={3.0}
+                            spacing={24}
+                        />
+                    )}
                 </View>
 
                 {/* Top Bar */}
@@ -189,6 +236,7 @@ export default function ReaderScreen() {
                     docId={docId}
                     documentName={name || 'Document'}
                     pdfUri={uri || ''}
+                    fileType={fileType}
                     startFromPage={rsvpStartPage}
                     onClose={handleRSVPClose}
                 />
@@ -213,4 +261,8 @@ const styles = StyleSheet.create({
         height: SCREEN_HEIGHT,
         backgroundColor: '#0a0a14',
     },
+    center: {
+        justifyContent: 'center',
+        alignItems: 'center',
+    }
 });

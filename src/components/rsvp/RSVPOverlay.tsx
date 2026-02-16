@@ -15,6 +15,7 @@ import { useProgress } from '../../hooks/useProgress';
 import { useRSVPEngine } from '../../hooks/useRSVPEngine';
 import { useRSVPStore } from '../../store/rsvpStore';
 import { RSVPToken } from '../../types';
+import { EPUB_WORKER_HTML, processExtractedEpubText } from '../../utils/epubExtractor';
 import { PDF_WORKER_HTML, processExtractedText, simpleHash, validateExtraction } from '../../utils/pdfExtractor';
 import { RSVPControls } from './RSVPControls';
 import { RSVPHeader } from './RSVPHeader';
@@ -35,6 +36,7 @@ interface RSVPOverlayProps {
     docId: number;
     documentName: string;
     pdfUri: string;
+    fileType: 'pdf' | 'epub';
     startFromPage?: number;
     onClose: () => void;
 }
@@ -71,7 +73,7 @@ function getContextWords(tokens: RSVPToken[], currentIndex: number, count: numbe
     };
 }
 
-export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPage, onClose }: RSVPOverlayProps) {
+export function RSVPOverlay({ visible, docId, documentName, pdfUri, fileType, startFromPage, onClose }: RSVPOverlayProps) {
     const webViewRef = useRef<WebView>(null);
     const [extractionError, setExtractionError] = useState<string | null>(null);
     const [showSettings, setShowSettings] = useState(false);
@@ -117,7 +119,22 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
                 store.setExtracting(true, (data.current / data.total) * 100);
             } else if (data.type === 'complete') {
                 // Process extracted text into tokens
-                const extractedTokens = processExtractedText(data, docId.toString());
+                let extractedTokens: RSVPToken[];
+
+                if (fileType === 'epub') {
+                    // Normalize pages (which are actually chapters/spines in our epub implementation) to have lines
+                    // The worker returns pages[i] = { text: "..." }, but our tokenizer needs lines.
+                    // We fixed the type definition in epubExtractor, but let's ensure runtime data is correct.
+                    // Actually, generatedTokenStream handles the splitting into words/lines.
+                    // But we used a different processor for EPUB: processExtractedEpubText
+
+                    // Note: The worker already returns pages with empty lines array probably? 
+                    // No, my EPUB_WORKER_HTML sets lines: [].
+                    // So we can pass it to processExtractedEpubText.
+                    extractedTokens = processExtractedEpubText(data as any, docId.toString());
+                } else {
+                    extractedTokens = processExtractedText(data, docId.toString());
+                }
 
                 // Validate extraction
                 const validation = validateExtraction(extractedTokens);
@@ -222,72 +239,96 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
                 const fileInfo = await FileSystem.getInfoAsync(pdfUri);
 
                 if (!fileInfo.exists) {
-                    throw new Error('PDF file not found');
+                    throw new Error('File not found');
                 }
 
-                const fileSizeMB = (fileInfo.size || 0) / (1024 * 1024);
-                console.log('[RSVPOverlay] PDF file size:', fileSizeMB.toFixed(2), 'MB');
+                if (fileType === 'epub') {
+                    // EPUB Extraction
+                    // For EPUB, we can read the whole file as base64 usually, as they are smaller than massive scanned PDFs
+                    // If it's huge, we might need chunking, but epub.js expects the whole thing.
+                    // Let's assume for now we can read it all.
 
-                if (fileSizeMB > 30) {
-                    console.warn('[RSVPOverlay] Large file detected, extraction may be slow');
-                }
+                    console.log('[RSVPOverlay] Reading EPUB file...');
+                    const base64 = await FileSystem.readAsStringAsync(pdfUri, { encoding: 'base64' });
 
-                // Chunked reading to avoid OOM
-                // IMPORTANT: CHUNK_SIZE must be a multiple of 3 to ensure valid Base64 concatenation without padding issues
-                const CHUNK_SIZE = 524286; // approx 512KB, divisible by 3 (524288 - 2)
-                const totalChunks = Math.ceil((fileInfo.size || 0) / CHUNK_SIZE);
-                console.log(`[RSVPOverlay] Reading ${(fileInfo.size || 0)} bytes in ${totalChunks} chunks...`);
-
-                // Wait for WebView to be ready (with timeout)
-                let waitAttempts = 0;
-                while (!webViewReadyRef.current && waitAttempts < 50) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                    waitAttempts++;
-                }
-                if (!webViewReadyRef.current) {
-                    throw new Error('WebView did not become ready in time');
-                }
-
-                if (webViewRef.current) {
-                    // Reset chunks in WebView
-                    webViewRef.current.postMessage(JSON.stringify({
-                        type: 'reset_chunks',
-                        total: totalChunks
-                    }));
-                }
-
-                // Allow time for WebView to process reset
-                await new Promise(resolve => setTimeout(resolve, 200));
-
-                // Read and send chunks sequentially
-                for (let i = 0; i < totalChunks; i++) {
-                    const position = i * CHUNK_SIZE;
-                    const length = Math.min(CHUNK_SIZE, (fileInfo.size || 0) - position);
-
-                    // Read chunk as base64
-                    const chunk = await FileSystem.readAsStringAsync(pdfUri, {
-                        encoding: 'base64',
-                        position: position,
-                        length: length
-                    });
+                    // Wait for WebView to be ready
+                    let waitAttempts = 0;
+                    while (!webViewReadyRef.current && waitAttempts < 50) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        waitAttempts++;
+                    }
 
                     if (webViewRef.current) {
                         webViewRef.current.postMessage(JSON.stringify({
-                            type: 'chunk',
-                            chunk: chunk,
-                            index: i,
+                            type: 'extract',
+                            epubBase64: base64
+                        }));
+                    }
+
+                } else {
+                    // PDF Extraction
+                    const fileSizeMB = (fileInfo.size || 0) / (1024 * 1024);
+                    console.log('[RSVPOverlay] PDF file size:', fileSizeMB.toFixed(2), 'MB');
+
+                    if (fileSizeMB > 30) {
+                        console.warn('[RSVPOverlay] Large file detected, extraction may be slow');
+                    }
+
+                    // Chunked reading to avoid OOM
+                    // IMPORTANT: CHUNK_SIZE must be a multiple of 3 to ensure valid Base64 concatenation without padding issues
+                    const CHUNK_SIZE = 524286; // approx 512KB, divisible by 3 (524288 - 2)
+                    const totalChunks = Math.ceil((fileInfo.size || 0) / CHUNK_SIZE);
+                    console.log(`[RSVPOverlay] Reading ${(fileInfo.size || 0)} bytes in ${totalChunks} chunks...`);
+
+                    // Wait for WebView to be ready (with timeout)
+                    let waitAttempts = 0;
+                    while (!webViewReadyRef.current && waitAttempts < 50) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        waitAttempts++;
+                    }
+                    if (!webViewReadyRef.current) {
+                        throw new Error('WebView did not become ready in time');
+                    }
+
+                    if (webViewRef.current) {
+                        // Reset chunks in WebView
+                        webViewRef.current.postMessage(JSON.stringify({
+                            type: 'reset_chunks',
                             total: totalChunks
                         }));
                     }
 
-                    // Small delay to prevent bridge overload and allow GC
-                    if (i % 5 === 0) await new Promise(resolve => setTimeout(resolve, 20));
-                }
+                    // Allow time for WebView to process reset
+                    await new Promise(resolve => setTimeout(resolve, 200));
 
-                console.log('[RSVPOverlay] All chunks sent to WebView');
-                // No need to send 'extract' message with data, the WebView triggers it auto when all chunks received
+                    // Read and send chunks sequentially
+                    for (let i = 0; i < totalChunks; i++) {
+                        const position = i * CHUNK_SIZE;
+                        const length = Math.min(CHUNK_SIZE, (fileInfo.size || 0) - position);
+
+                        // Read chunk as base64
+                        const chunk = await FileSystem.readAsStringAsync(pdfUri, {
+                            encoding: 'base64',
+                            position: position,
+                            length: length
+                        });
+
+                        if (webViewRef.current) {
+                            webViewRef.current.postMessage(JSON.stringify({
+                                type: 'chunk',
+                                chunk: chunk,
+                                index: i,
+                                total: totalChunks
+                            }));
+                        }
+
+                        // Small delay to prevent bridge overload and allow GC
+                        if (i % 5 === 0) await new Promise(resolve => setTimeout(resolve, 20));
+                    }
+                    console.log('[RSVPOverlay] All chunks sent to WebView');
+                }
             } catch (error: any) {
-                console.error('Failed to read PDF:', error);
+                console.error('Failed to read file:', error);
                 extractionInProgressRef.current = false;
 
                 // Check if it's an OOM error
@@ -364,7 +405,10 @@ export function RSVPOverlay({ visible, docId, documentName, pdfUri, startFromPag
                 {/* Hidden WebView for PDF extraction */}
                 <WebView
                     ref={webViewRef}
-                    source={{ html: PDF_WORKER_HTML, baseUrl: pdfUri }} // Set baseUrl to allow relative paths if needed
+                    source={{
+                        html: fileType === 'epub' ? EPUB_WORKER_HTML : PDF_WORKER_HTML,
+                        baseUrl: pdfUri
+                    }}
                     onMessage={handleWebViewMessage}
                     style={styles.hiddenWebView}
                     javaScriptEnabled={true}
