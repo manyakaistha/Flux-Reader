@@ -12,6 +12,12 @@ A high-performance **Rapid Serial Visual Presentation (RSVP)** document reader b
 - **🎨 Premium Design**: A beautiful, dark-mode first UI featuring custom typography (EB Garamond, Instrument Serif, Inter) and smooth animations.
 - **🖼️ Auto-Thumbnails**: Automatically generates thumbnails for your PDF documents for a visual library experience.
 
+## 📥 Download
+
+Get the latest Android release:
+
+[![Download Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/manyakaistha/RSVP-PDF-Reader/releases/download/v0.0.01/Flux.Reader.apk)
+
 ## 🛠️ Tech Stack
 
 - **Framework**: [React Native](https://reactnative.dev/) (Expo SDK 54)
@@ -44,6 +50,23 @@ A high-performance **Rapid Serial Visual Presentation (RSVP)** document reader b
    - Press `i` to open in iOS Simulator
    - Press `a` to open in Android Emulator
    - Scan the QR code with Expo Go on your physical device
+
+## 📥 Download & Install
+
+You can download the latest Android APK directly from here:
+
+[![Download APK](https://img.shields.io/badge/Download-APK-2E7D32?style=for-the-badge&logo=android&logoColor=white)](https://github.com/manyakaistha/Flux-Reader/releases/download/v0.0.01/Flux.Reader.apk)
+
+### How to Install (using Google Files)
+
+1.  **Download**: Click the button above to download the `Flux.Reader.apk` file.
+2.  **Open Google Files**: Launch the "Files by Google" app on your Android device.
+3.  **Go to Downloads**: Tap on the **Downloads** category.
+4.  **Find the APK**: You should see `Flux.Reader.apk` at the top of the list.
+5.  **Install**: Tap on the file.
+    *   If prompted, enable "Install from Unknown Sources" for Google Files.
+    *   Tap **Install** in the pop-up window.
+6.  **Enjoy**: Once installed, tap **Open** to start speed reading!
 
 ## 📖 Usage
 

@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "rsvp_doc_reader_final",
-    "slug": "rsvp_doc_reader_final",
+    "name": "Flux",
+    "slug": "flux",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "rsvpdocreaderfinal",
+    "scheme": "flux",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -51,8 +51,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "f07f1506-de3e-41ea-939d-899908b241eb"
+        "projectId": "8b570db6-6813-4780-aef7-911312c7705d"
       }
-    }
+    },
+    "owner": "manyakaistha1"
   }
 }
