@@ -75,6 +75,10 @@ A high-performance **Rapid Serial Visual Presentation (RSVP)** document reader b
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Contact
+
+You can contact me at manyakaistha.dev@gmail.com for any issues or feature requests that you might have.
+
 ## 📄 License
 
 This project is licensed under the MIT License.
