@@ -2,6 +2,12 @@
 
 A high-performance **Rapid Serial Visual Presentation (RSVP)** document reader built with **React Native** and **Expo**. This application is designed to help users speed-read documents by displaying text one word at a time at a user-controlled speed, minimizing eye movement and increasing reading efficiency.
 
+## 📥 Download
+
+Get the latest Android release:
+
+[![Download Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/manyakaistha/RSVP-PDF-Reader/releases/download/v0.0.01/Flux.Reader.apk)
+
 ## 🚀 Features
 
 - **📚 Universal Document Support**: Seamlessly import and read both **PDF** and **EPUB** files.
@@ -11,12 +17,6 @@ A high-performance **Rapid Serial Visual Presentation (RSVP)** document reader b
 - **📂 Library Management**: Organize your documents with Grid/List views, search, and sorting options.
 - **🎨 Premium Design**: A beautiful, dark-mode first UI featuring custom typography (EB Garamond, Instrument Serif, Inter) and smooth animations.
 - **🖼️ Auto-Thumbnails**: Automatically generates thumbnails for your PDF documents for a visual library experience.
-
-## 📥 Download
-
-Get the latest Android release:
-
-[![Download Android APK](https://img.shields.io/badge/Download-Android%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/manyakaistha/RSVP-PDF-Reader/releases/download/v0.0.01/Flux.Reader.apk)
 
 ## 🛠️ Tech Stack
 
